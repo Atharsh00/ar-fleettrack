@@ -805,37 +805,36 @@
 
         let createdCount = 0;
         const newExpensesCreated = [];
+        const successfulEmailIds = [];
 
         sampleEmails.forEach(mail => {
           const subjectLower = (mail.subject || '').toLowerCase();
+          const bodyLower = (mail.body || '').toLowerCase();
           const cleanTollFilter = (config.tollSubjectFilter || '').replace(/["']/g, '').toLowerCase().trim();
           const cleanFuelFilter = (config.fuelSubjectFilter || '').replace(/["']/g, '').toLowerCase().trim();
 
-          const isToll = config.tollEnabled && cleanTollFilter && (
-            subjectLower.includes(cleanTollFilter) ||
-            cleanTollFilter.split(/\s+/).every(word => word && subjectLower.includes(word))
-          );
-          const isFuel = config.fuelEnabled && cleanFuelFilter && (
-            subjectLower.includes(cleanFuelFilter) ||
-            cleanFuelFilter.split(/\s+/).every(word => word && subjectLower.includes(word))
-          );
+          // Determine category: if it contains fuel keywords, diesel, petrol, oil -> DIESEL; otherwise TOLL
+          const isFuel = (cleanFuelFilter && (subjectLower.includes(cleanFuelFilter) || bodyLower.includes(cleanFuelFilter))) ||
+                         subjectLower.includes('fuel') || subjectLower.includes('diesel') || bodyLower.includes('fuel');
+          const category = isFuel ? 'DIESEL' : 'TOLL';
 
-          if (!isToll && !isFuel) return; // Skip if subject filter doesn't match or toggled off
-
-          const category = isToll ? 'TOLL' : 'DIESEL';
-
-          // Extract Amount (e.g., INR 650.00 or Rs 18,200.00 or ₹ 500 or debited by 500)
+          // Extract Amount (e.g., INR 650.00, Rs. 500, ₹ 500, 500/-, debited 500, or raw digits)
           let amount = 0;
           const fullText = `${mail.subject} ${mail.body}`;
-          const amtMatch = fullText.match(/(?:INR|Rs\.?|₹)\s*([\d,]+(?:\.\d+)?)/i) ||
-                           fullText.match(/debited\s*(?:by|of|with|for)?\s*(?:INR|Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)/i) ||
-                           fullText.match(/(?:deducted|transaction of|spent|paid)\s*(?:INR|Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)/i) ||
-                           fullText.match(/([\d,]+(?:\.\d+)?)\s*(?:INR|Rs\.?|₹)/i);
-          if (amtMatch) {
-            amount = parseFloat(amtMatch[1].replace(/,/g, '')) || 0;
+          
+          const p1 = fullText.match(/(?:INR|Rs\.?|₹)\s*([\d,]+(?:\.\d+)?)/i);
+          const p2 = fullText.match(/([\d,]+(?:\.\d+)?)\s*(?:INR|Rs\.?|₹|\/-)/i);
+          const p3 = fullText.match(/(?:debited|deducted|charged|spent|amount|toll|fare|payment|purchase|fee|rs)(?:\s*(?:is|of|by|with|for|:))?\s*(?:INR|Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)/i);
+          const p4 = fullText.match(/\b([1-9]\d{1,5}(?:\.\d{1,2})?)\b/);
+
+          const amtStr = p1?.[1] || p2?.[1] || p3?.[1] || p4?.[1];
+          if (amtStr) {
+            amount = parseFloat(amtStr.replace(/,/g, '')) || 0;
           }
 
-          // Extract Truck Number from Body/Subject by checking registered trucks in active profile
+          if (amount <= 0) return; // Skip if no amount detected
+
+          // Extract Truck Number by checking registered trucks
           let matchedTruck = scopedTrucks.find(trk => {
             const cleanReg = trk.registrationNumber.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
             const cleanText = fullText.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
@@ -848,32 +847,36 @@
             const regMatch = fullText.match(regPattern);
             if (regMatch) {
               const matchedStr = regMatch[0].replace(/\s+/g, '-').toUpperCase();
-              matchedTruck = scopedTrucks.find(t => t.registrationNumber.toUpperCase() === matchedStr) || scopedTrucks[0];
+              matchedTruck = scopedTrucks.find(t => t.registrationNumber.toUpperCase() === matchedStr);
             }
           }
           if (!matchedTruck && scopedTrucks.length > 0) matchedTruck = scopedTrucks[0];
-          if (!matchedTruck || amount <= 0) return;
+
+          const targetTruckId = matchedTruck ? matchedTruck.id : (scopedTrucks[0]?.id || 'trk-1');
+          const targetTruckReg = matchedTruck ? matchedTruck.registrationNumber : (scopedTrucks[0]?.registrationNumber || 'Fleet Vehicle');
 
           // Tag current ongoing trip for that truck based on date
           const mailDate = mail.date || new Date().toISOString().split('T')[0];
           const ongoingTrip = scopedTrips.find(t => {
-            return t.truckId === matchedTruck.id && t.date <= mailDate;
-          }) || scopedTrips.find(t => t.truckId === matchedTruck.id);
+            return t.truckId === targetTruckId && t.date <= mailDate;
+          }) || scopedTrips.find(t => t.truckId === targetTruckId);
 
           const newExp = {
             id: `exp-auto-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
             profileId: activeProfileId,
             date: mailDate,
-            truckId: matchedTruck.id,
+            truckId: targetTruckId,
             tripId: ongoingTrip ? ongoingTrip.id : undefined,
             isReimbursable: false,
             category: category,
             amount: amount,
-            paymentMethod: isToll ? 'FASTag (Auto-Email)' : 'Fleet Card (Auto-Email)',
-            notes: `Auto-parsed from email [${mail.from}]: ${mail.subject} | Ref Truck: ${matchedTruck.registrationNumber}${ongoingTrip ? ` | Tagged to Trip: ${ongoingTrip.route}` : ' | Unlinked (no ongoing trip)'}`
+            paymentMethod: category === 'TOLL' ? 'FASTag (Auto-Email)' : 'Fleet Card (Auto-Email)',
+            notes: `Auto-parsed from email [${mail.from || 'Gmail'}]: ${mail.subject} | Ref Truck: ${targetTruckReg}${ongoingTrip ? ` | Tagged to Trip: ${ongoingTrip.route}` : ' | Unlinked (no ongoing trip)'}`,
+            sourceEmailId: mail.id
           };
 
           newExpensesCreated.push(newExp);
+          if (mail.id) successfulEmailIds.push(mail.id);
           createdCount++;
         });
 
@@ -885,6 +888,7 @@
         return {
           syncedCount: createdCount,
           expenses: newExpensesCreated,
+          successfulEmailIds: successfulEmailIds,
           lastSyncedAt: new Date().toISOString()
         };
       };
@@ -949,17 +953,17 @@
         if (newMsgList.length === 0) {
           updateEmailSyncConfig({ lastSyncedAt: new Date().toISOString() });
           const explanation = allFound.length > 0
-            ? `Found ${allFound.length} matching alert email(s) in Gmail, but they were already processed and recorded in your ledger!`
+            ? `Found ${allFound.length} matching alert email(s) in Gmail, but they were already in the processed cache. Click "Force Re-Scan (Clear Cache)" to re-parse them into the ledger!`
             : `Scanned Gmail for query [${searchQuery}]: 0 matching emails found. Please ensure the incoming email has arrived in your inbox and contains "${tollKeyword || fuelKeyword}" in the subject line.`;
           return {
             syncedCount: 0,
+            hasCachedEmails: allFound.length > 0,
             message: explanation
           };
         }
 
         // 2. Fetch full message payloads
         const fetchedEmails = [];
-        const msgIdsToMarkRead = [];
 
         for (const item of newMsgList) {
           try {
@@ -997,7 +1001,6 @@
               date: mailDate,
               body: bodyContent
             });
-            msgIdsToMarkRead.push(item.id);
           } catch (itemErr) {
             console.warn('Error reading message detail:', itemErr);
           }
@@ -1006,23 +1009,34 @@
         // 3. Ingest through our local trip-tagging engine
         const ingestRes = syncExpensesFromEmails(fetchedEmails, config);
 
-        // 4. Mark messages as read & save processed IDs to prevent duplicates
-        const updatedProcessed = Array.from(new Set([...processedSet, ...msgIdsToMarkRead]));
-        localStorage.setItem('fleet_processed_gmail_msg_ids', JSON.stringify(updatedProcessed.slice(-500)));
+        // ONLY mark as processed the email IDs that were ACTUALLY recorded!
+        const actuallyRecordedIds = ingestRes.successfulEmailIds || [];
 
-        for (const mId of msgIdsToMarkRead) {
-          try {
-            await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${mId}/modify`, {
-              method: 'POST',
-              headers: {
-                Authorization: `Bearer ${accessToken}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({ removeLabelIds: ['UNREAD'] })
-            });
-          } catch (modErr) {
-            console.warn('Error marking message as read in Gmail:', modErr);
+        if (actuallyRecordedIds.length > 0) {
+          const updatedProcessed = Array.from(new Set([...processedSet, ...actuallyRecordedIds]));
+          localStorage.setItem('fleet_processed_gmail_msg_ids', JSON.stringify(updatedProcessed.slice(-500)));
+
+          for (const mId of actuallyRecordedIds) {
+            try {
+              await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${mId}/modify`, {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ removeLabelIds: ['UNREAD'] })
+              });
+            } catch (modErr) {
+              console.warn('Error marking message as read in Gmail:', modErr);
+            }
           }
+        }
+
+        if (ingestRes.syncedCount === 0 && fetchedEmails.length > 0) {
+          return {
+            syncedCount: 0,
+            message: `Found ${fetchedEmails.length} matching email(s), but could not detect a valid debit amount (e.g. ₹500 or Rs 650) in them.`
+          };
         }
 
         return {
@@ -3029,6 +3043,11 @@
         }
       };
 
+      const handleForceRescan = () => {
+        localStorage.removeItem('fleet_processed_gmail_msg_ids');
+        handleSyncLiveGmail(false);
+      };
+
       // Automatic background sync (every 45s while tab is open or when switching back to tab)
       useEffect(() => {
         if (!googleToken || !autoSyncEnabled) return;
@@ -3563,6 +3582,16 @@
                         >
                           <span>{isSyncingGmail ? '⏳' : '🔄'}</span>
                           <span>{isSyncingGmail ? 'Scanning...' : 'Sync Now'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isSyncingGmail}
+                          onClick={handleForceRescan}
+                          className="px-3.5 py-2.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-bold rounded-xl text-xs border border-amber-500/30 transition flex items-center gap-1.5"
+                          title="Clears processed cache and immediately re-scans and parses all matching emails from Gmail into your ledger"
+                        >
+                          <span>⚡</span>
+                          <span>Re-Scan All (Clear Cache)</span>
                         </button>
                         <button
                           type="button"
