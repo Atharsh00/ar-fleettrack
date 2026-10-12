@@ -1,0 +1,239 @@
+// Prisma schema for Fleet Expense & Revenue Management System (Multi-Profile Support)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite" // Can be switched to "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TruckStatus {
+  ACTIVE
+  IN_MAINTENANCE
+  INACTIVE
+}
+
+enum DriverStatus {
+  ACTIVE
+  ON_LEAVE
+  INACTIVE
+}
+
+enum ExpenseCategory {
+  DIESEL
+  MAINTENANCE
+  TOLL
+  INSURANCE
+  PERMITS
+  SPARE_PARTS
+  OTHER
+}
+
+enum DriverPaymentType {
+  SALARY_PAYOUT    // Cash payout / advance disbursed to driver
+  DRIVER_EXPENSE   // Out-of-pocket expense incurred by driver
+}
+
+enum TripStatus {
+  COMPLETED
+  IN_TRANSIT
+  CANCELLED
+}
+
+model Profile {
+  id                 String              @id @default(uuid())
+  name               String              // e.g. "Apex Roadlines Ltd" or "Mahavir Freight"
+  isDefault          Boolean             @default(false)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  trucks             Truck[]
+  companies          Company[]
+  drivers            Driver[]
+  trips              Trip[]
+  expenses           TruckExpense[]
+  driverPayments     DriverPayment[]
+  settlements        CompanySettlement[]
+  systemRules        SystemRule?
+
+  @@map("profiles")
+}
+
+model SystemRule {
+  id                         String    @id @default(uuid())
+  profileId                  String    @unique
+  defaultDriverSalaryPercent Float     @default(15.0) // 15%
+  defaultTdsPercent          Float     @default(1.0)  // 1%
+  updatedAt                  DateTime  @updatedAt
+
+  profile                    Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@map("system_rules")
+}
+
+model Truck {
+  id                 String         @id @default(uuid())
+  profileId          String
+  registrationNumber String         // e.g., MH-12-AB-1234
+  model              String         // e.g., Tata Signa 4825.TK
+  capacity           String         // e.g., 25 Ton
+  status             TruckStatus    @default(ACTIVE)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  profile            Profile        @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  trips              Trip[]
+  expenses           TruckExpense[]
+
+  @@unique([profileId, registrationNumber])
+  @@index([profileId])
+  @@map("trucks")
+}
+
+model Company {
+  id                 String              @id @default(uuid())
+  profileId          String
+  name               String              // Client / Shipper company
+  contactPerson      String?
+  phone              String?
+  email              String?
+  address            String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  profile            Profile             @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  trips              Trip[]
+  settlements        CompanySettlement[]
+
+  @@unique([profileId, name])
+  @@index([profileId])
+  @@map("companies")
+}
+
+model Driver {
+  id                 String          @id @default(uuid())
+  profileId          String
+  name               String
+  phone              String
+  licenseNumber      String
+  status             DriverStatus    @default(ACTIVE)
+  joiningDate        DateTime        @default(now())
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  profile            Profile         @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  trips              Trip[]
+  payments           DriverPayment[]
+
+  @@index([profileId])
+  @@map("drivers")
+}
+
+model Trip {
+  id                      String      @id @default(uuid())
+  profileId               String
+  date                    DateTime    // Date of Trip
+  fromLocation            String      // Origin
+  toLocation              String      // Destination
+  additionalDrops         String?     // JSON array of intermediate drop locations
+  route                   String?     // Combined route summary
+  truckId                 String
+  companyId               String
+  driverId                String
+  
+  // Revised Financials
+  totalRent               Float       // Agreed Gross Rent (INR)
+  commissionAmount        Float       @default(0.0) // Broker commission
+  isTdsDeducted           Boolean     @default(false)
+  tdsPercent              Float       @default(1.0)
+  tdsAmount               Float       @default(0.0) // 1% of totalRent if isTdsDeducted
+  netRent                 Float       // totalRent - tdsAmount - commissionAmount
+  driverCommissionPercent Float       @default(15.0)
+  driverCommission        Float       // 15% of netRent
+  advanceReceived         Float       @default(0.0)
+  balancePending          Float       // totalRent - advanceReceived - tdsAmount
+
+  status                  TripStatus  @default(COMPLETED)
+  notes                   String?
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
+
+  profile                 Profile     @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  truck                   Truck       @relation(fields: [truckId], references: [id], onDelete: Restrict)
+  company                 Company     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  driver                  Driver      @relation(fields: [driverId], references: [id], onDelete: Restrict)
+
+  @@index([profileId])
+  @@index([date])
+  @@index([truckId])
+  @@index([companyId])
+  @@index([driverId])
+  @@map("trips")
+}
+
+model TruckExpense {
+  id                 String          @id @default(uuid())
+  profileId          String
+  date               DateTime
+  truckId            String
+  category           ExpenseCategory
+  amount             Float
+  paymentMethod      String          // "Cash", "Fleet Card", "UPI", "Bank Transfer"
+  notes              String?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  profile            Profile         @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  truck              Truck           @relation(fields: [truckId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@index([date])
+  @@index([truckId])
+  @@index([category])
+  @@map("truck_expenses")
+}
+
+model DriverPayment {
+  id                 String            @id @default(uuid())
+  profileId          String
+  date               DateTime
+  driverId           String
+  type               DriverPaymentType // SALARY_PAYOUT or DRIVER_EXPENSE
+  amount             Float
+  paymentMethod      String?           // "Cash", "UPI", "Bank Transfer"
+  description        String
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  profile            Profile           @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  driver             Driver            @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@index([date])
+  @@index([driverId])
+  @@index([type])
+  @@map("driver_payments")
+}
+
+model CompanySettlement {
+  id                 String      @id @default(uuid())
+  profileId          String
+  date               DateTime
+  companyId          String
+  amount             Float
+  paymentMethod      String      // "NEFT", "Cheque", "Cash", "UPI"
+  referenceNumber    String?
+  notes              String?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  profile            Profile     @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  company            Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@index([date])
+  @@index([companyId])
+  @@map("company_settlements")
+}
