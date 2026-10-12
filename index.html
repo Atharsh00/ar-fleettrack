@@ -774,10 +774,10 @@
       };
 
       // Automated Email Parsing Engine for Toll & Fuel Debits
-      const syncExpensesFromEmails = (customSampleEmails = null) => {
-        const config = activeEmailConfig;
+      const syncExpensesFromEmails = (customSampleEmails = null, overrideConfig = null) => {
+        const config = overrideConfig || activeEmailConfig;
         if (!config.linkedEmail) {
-          throw new Error('Please link an email address in Master Management > Email Expense Sync before syncing.');
+          config.linkedEmail = localStorage.getItem('fleet_google_email') || currentUser?.email || 'accounts@fleet.app';
         }
         if (!config.tollEnabled && !config.fuelEnabled) {
           throw new Error('Both Toll and Fuel sync options are currently toggled OFF in Master Management.');
@@ -807,35 +807,45 @@
         const newExpensesCreated = [];
 
         sampleEmails.forEach(mail => {
-          const subjectLower = mail.subject.toLowerCase();
-          const tollFilterLower = (config.tollSubjectFilter || '').toLowerCase().trim();
-          const fuelFilterLower = (config.fuelSubjectFilter || '').toLowerCase().trim();
+          const subjectLower = (mail.subject || '').toLowerCase();
+          const cleanTollFilter = (config.tollSubjectFilter || '').replace(/["']/g, '').toLowerCase().trim();
+          const cleanFuelFilter = (config.fuelSubjectFilter || '').replace(/["']/g, '').toLowerCase().trim();
 
-          const isToll = config.tollEnabled && tollFilterLower && subjectLower.includes(tollFilterLower);
-          const isFuel = config.fuelEnabled && fuelFilterLower && subjectLower.includes(fuelFilterLower);
+          const isToll = config.tollEnabled && cleanTollFilter && (
+            subjectLower.includes(cleanTollFilter) ||
+            cleanTollFilter.split(/\s+/).every(word => word && subjectLower.includes(word))
+          );
+          const isFuel = config.fuelEnabled && cleanFuelFilter && (
+            subjectLower.includes(cleanFuelFilter) ||
+            cleanFuelFilter.split(/\s+/).every(word => word && subjectLower.includes(word))
+          );
 
           if (!isToll && !isFuel) return; // Skip if subject filter doesn't match or toggled off
 
           const category = isToll ? 'TOLL' : 'DIESEL';
 
-          // Extract Amount (e.g., INR 650.00 or Rs 18,200.00)
+          // Extract Amount (e.g., INR 650.00 or Rs 18,200.00 or ₹ 500 or debited by 500)
           let amount = 0;
-          const amtMatch = mail.body.match(/(?:INR|Rs\.?|₹)\s*([\d,]+(?:\.\d+)?)/i);
+          const fullText = `${mail.subject} ${mail.body}`;
+          const amtMatch = fullText.match(/(?:INR|Rs\.?|₹)\s*([\d,]+(?:\.\d+)?)/i) ||
+                           fullText.match(/debited\s*(?:by|of|with|for)?\s*(?:INR|Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)/i) ||
+                           fullText.match(/(?:deducted|transaction of|spent|paid)\s*(?:INR|Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)/i) ||
+                           fullText.match(/([\d,]+(?:\.\d+)?)\s*(?:INR|Rs\.?|₹)/i);
           if (amtMatch) {
             amount = parseFloat(amtMatch[1].replace(/,/g, '')) || 0;
           }
 
-          // Extract Truck Number from Body by checking registered trucks in active profile
+          // Extract Truck Number from Body/Subject by checking registered trucks in active profile
           let matchedTruck = scopedTrucks.find(trk => {
             const cleanReg = trk.registrationNumber.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-            const cleanBody = mail.body.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-            return cleanBody.includes(cleanReg);
+            const cleanText = fullText.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+            return cleanText.includes(cleanReg);
           });
 
           // Fallback: search regex pattern like MH-12-RN-4825 or similar
           if (!matchedTruck) {
             const regPattern = /[A-Z]{2}[-\s]?[0-9]{2}[-\s]?[A-Z]{1,3}[-\s]?[0-9]{4}/i;
-            const regMatch = mail.body.match(regPattern);
+            const regMatch = fullText.match(regPattern);
             if (regMatch) {
               const matchedStr = regMatch[0].replace(/\s+/g, '-').toUpperCase();
               matchedTruck = scopedTrucks.find(t => t.registrationNumber.toUpperCase() === matchedStr) || scopedTrucks[0];
@@ -845,7 +855,7 @@
           if (!matchedTruck || amount <= 0) return;
 
           // Tag current ongoing trip for that truck based on date
-          const mailDate = mail.date;
+          const mailDate = mail.date || new Date().toISOString().split('T')[0];
           const ongoingTrip = scopedTrips.find(t => {
             return t.truckId === matchedTruck.id && t.date <= mailDate;
           }) || scopedTrips.find(t => t.truckId === matchedTruck.id);
@@ -896,27 +906,31 @@
       };
 
       // 1-Click Live Gmail Sync Engine
-      const syncFromLiveGmail = async (accessToken) => {
+      const syncFromLiveGmail = async (accessToken, overrideConfig = null) => {
         if (!accessToken) throw new Error('Gmail is not connected. Please click "Connect Gmail" first.');
 
-        const config = activeEmailConfig;
+        const config = overrideConfig || activeEmailConfig;
         if (!config.tollEnabled && !config.fuelEnabled) {
           throw new Error('Both Toll and Fuel sync options are toggled OFF in your settings.');
         }
 
+        const tollKeyword = (config.tollSubjectFilter || '').replace(/["']/g, '').trim();
+        const fuelKeyword = (config.fuelSubjectFilter || '').replace(/["']/g, '').trim();
+
         const queries = [];
-        if (config.tollEnabled && config.tollSubjectFilter) {
-          queries.push(`subject:"${config.tollSubjectFilter}"`);
+        if (config.tollEnabled && tollKeyword) {
+          queries.push(`subject:(${tollKeyword})`);
         }
-        if (config.fuelEnabled && config.fuelSubjectFilter) {
-          queries.push(`subject:"${config.fuelSubjectFilter}"`);
+        if (config.fuelEnabled && fuelKeyword) {
+          queries.push(`subject:(${fuelKeyword})`);
         }
-        if (queries.length === 0) queries.push('subject:FASTag OR subject:Fuel OR subject:Toll');
+        if (queries.length === 0) queries.push('subject:(FASTag OR Fuel OR Toll)');
 
-        const searchQuery = `is:unread (${queries.join(' OR ')})`;
+        // Query recent messages matching the subject keywords (from last 14 days)
+        const searchQuery = `newer_than:14d (${queries.join(' OR ')})`;
 
-        // 1. Query unread matching messages
-        const listRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(searchQuery)}&maxResults=20`, {
+        // 1. Query matching messages
+        const listRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(searchQuery)}&maxResults=25`, {
           headers: { Authorization: `Bearer ${accessToken}` }
         });
 
@@ -926,13 +940,20 @@
         }
 
         const listData = await listRes.json();
-        const msgList = listData.messages || [];
+        const allFound = listData.messages || [];
 
-        if (msgList.length === 0) {
+        // Track already processed IDs in localStorage to avoid duplicates
+        const processedSet = new Set(JSON.parse(localStorage.getItem('fleet_processed_gmail_msg_ids') || '[]'));
+        const newMsgList = allFound.filter(m => !processedSet.has(m.id));
+
+        if (newMsgList.length === 0) {
           updateEmailSyncConfig({ lastSyncedAt: new Date().toISOString() });
+          const explanation = allFound.length > 0
+            ? `Found ${allFound.length} matching alert email(s) in Gmail, but they were already processed and recorded in your ledger!`
+            : `Scanned Gmail for query [${searchQuery}]: 0 matching emails found. Please ensure the incoming email has arrived in your inbox and contains "${tollKeyword || fuelKeyword}" in the subject line.`;
           return {
             syncedCount: 0,
-            message: 'Scanned inbox: No unread FASTag or Fuel alert emails found matching your subject keywords.'
+            message: explanation
           };
         }
 
@@ -940,7 +961,7 @@
         const fetchedEmails = [];
         const msgIdsToMarkRead = [];
 
-        for (const item of msgList) {
+        for (const item of newMsgList) {
           try {
             const detailRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${item.id}?format=full`, {
               headers: { Authorization: `Bearer ${accessToken}` }
@@ -983,9 +1004,12 @@
         }
 
         // 3. Ingest through our local trip-tagging engine
-        const ingestRes = syncExpensesFromEmails(fetchedEmails);
+        const ingestRes = syncExpensesFromEmails(fetchedEmails, config);
 
-        // 4. Mark messages as read so they are not re-processed
+        // 4. Mark messages as read & save processed IDs to prevent duplicates
+        const updatedProcessed = Array.from(new Set([...processedSet, ...msgIdsToMarkRead]));
+        localStorage.setItem('fleet_processed_gmail_msg_ids', JSON.stringify(updatedProcessed.slice(-500)));
+
         for (const mId of msgIdsToMarkRead) {
           try {
             await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${mId}/modify`, {
@@ -1003,7 +1027,7 @@
 
         return {
           syncedCount: ingestRes.syncedCount,
-          message: `Scanned Gmail: Found and logged ${ingestRes.syncedCount} new expenses with active trip tagging!`
+          message: `Scanned Gmail: Found and logged ${ingestRes.syncedCount} new expense(s) tagged to active trips!`
         };
       };
 
@@ -2880,6 +2904,8 @@
       const [isSyncingGmail, setIsSyncingGmail] = useState(false);
       const [showClientIdConfig, setShowClientIdConfig] = useState(false);
       const [clientIdInput, setClientIdInput] = useState(() => localStorage.getItem('fleet_google_client_id') || '');
+      const [autoSyncEnabled, setAutoSyncEnabled] = useState(() => localStorage.getItem('fleet_auto_sync') !== 'false');
+      const [lastSyncTime, setLastSyncTime] = useState(null);
 
       // Email Sync State
       const [syncEmail, setSyncEmail] = useState(activeEmailConfig?.linkedEmail || '');
@@ -2935,7 +2961,7 @@
 
                 setSyncStatusMsg({
                   error: false,
-                  text: `🎉 Successfully connected to Gmail! (${userEmailFound || 'Authorized'}) Click "Fetch & Sync Live Emails Now" to scan and log alerts.`
+                  text: `🎉 Successfully connected to Gmail! (${userEmailFound || 'Authorized'}) Auto-sync active.`
                 });
               } else if (tokenResponse && tokenResponse.error) {
                 setSyncStatusMsg({
@@ -2962,28 +2988,68 @@
         });
       };
 
-      const handleSyncLiveGmail = async () => {
+      const handleSyncLiveGmail = async (isBackground = false) => {
         if (!googleToken) {
-          alert('Please connect your Gmail account first.');
+          if (!isBackground) alert('Please connect your Gmail account first.');
           return;
         }
-        setIsSyncingGmail(true);
-        setSyncStatusMsg(null);
+        if (!isBackground) setIsSyncingGmail(true);
+        if (!isBackground) setSyncStatusMsg(null);
+
+        const currentConfig = {
+          linkedEmail: syncEmail.trim() || googleEmail,
+          tollEnabled: syncTollEnabled,
+          tollSubjectFilter: syncTollSubject.trim(),
+          fuelEnabled: syncFuelEnabled,
+          fuelSubjectFilter: syncFuelSubject.trim(),
+        };
+        // Auto-persist latest input state so user changes apply immediately without needing to click Save first
+        updateEmailSyncConfig(currentConfig);
+
         try {
-          const res = await syncFromLiveGmail(googleToken);
-          setSyncStatusMsg({
-            error: false,
-            text: `✅ ${res.message}`
-          });
+          const res = await syncFromLiveGmail(googleToken, currentConfig);
+          setLastSyncTime(new Date().toLocaleTimeString());
+          if (!isBackground || res.syncedCount > 0) {
+            setSyncStatusMsg({
+              error: false,
+              text: isBackground
+                ? `⚡ Auto-Synced: ${res.message}`
+                : `✅ ${res.message}`
+            });
+          }
         } catch (err) {
-          setSyncStatusMsg({
-            error: true,
-            text: `⚠️ Gmail Sync Error: ${err.message}`
-          });
+          if (!isBackground) {
+            setSyncStatusMsg({
+              error: true,
+              text: `⚠️ Gmail Sync Error: ${err.message}`
+            });
+          }
         } finally {
-          setIsSyncingGmail(false);
+          if (!isBackground) setIsSyncingGmail(false);
         }
       };
+
+      // Automatic background sync (every 45s while tab is open or when switching back to tab)
+      useEffect(() => {
+        if (!googleToken || !autoSyncEnabled) return;
+
+        const initialTimer = setTimeout(() => {
+          handleSyncLiveGmail(true);
+        }, 1500);
+
+        const interval = setInterval(() => {
+          handleSyncLiveGmail(true);
+        }, 45000);
+
+        const onFocus = () => handleSyncLiveGmail(true);
+        window.addEventListener('focus', onFocus);
+
+        return () => {
+          clearTimeout(initialTimer);
+          clearInterval(interval);
+          window.removeEventListener('focus', onFocus);
+        };
+      }, [googleToken, autoSyncEnabled, syncTollSubject, syncFuelSubject, syncTollEnabled, syncFuelEnabled, googleEmail]);
 
       // Keep sync state synced when active profile changes
       useEffect(() => {
@@ -3471,15 +3537,32 @@
                         </button>
                       </>
                     ) : (
-                      <>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = !autoSyncEnabled;
+                            setAutoSyncEnabled(next);
+                            localStorage.setItem('fleet_auto_sync', String(next));
+                          }}
+                          className={`px-3.5 py-2.5 rounded-xl text-xs font-black flex items-center gap-1.5 border transition ${
+                            autoSyncEnabled 
+                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30' 
+                              : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'
+                          }`}
+                          title="Automatically checks Gmail every 45 seconds while this tab is open"
+                        >
+                          <span className={autoSyncEnabled ? "w-2 h-2 rounded-full bg-emerald-400 animate-pulse" : "w-2 h-2 rounded-full bg-slate-500"}></span>
+                          <span>{autoSyncEnabled ? 'Auto-Sync: ON (45s)' : 'Auto-Sync: OFF'}</span>
+                        </button>
                         <button
                           type="button"
                           disabled={isSyncingGmail}
-                          onClick={handleSyncLiveGmail}
+                          onClick={() => handleSyncLiveGmail(false)}
                           className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs shadow-lg flex items-center gap-2 transition disabled:opacity-50"
                         >
                           <span>{isSyncingGmail ? '⏳' : '🔄'}</span>
-                          <span>{isSyncingGmail ? 'Scanning Gmail Inbox...' : 'Fetch & Sync Live Emails Now'}</span>
+                          <span>{isSyncingGmail ? 'Scanning...' : 'Sync Now'}</span>
                         </button>
                         <button
                           type="button"
@@ -3488,10 +3571,20 @@
                         >
                           ✕ Disconnect
                         </button>
-                      </>
+                      </div>
                     )}
                   </div>
                 </div>
+
+                {googleToken && (
+                  <div className="mt-2 text-[11px] text-slate-400 flex items-center justify-between border-t border-slate-800/60 pt-2 font-mono">
+                    <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
+                      <span>●</span>
+                      <span>{autoSyncEnabled ? 'Real-time auto sync is running in the background.' : 'Auto-sync is paused. Click Sync Now to check manually.'}</span>
+                    </span>
+                    <span>{lastSyncTime ? `Last scan: ${lastSyncTime}` : 'Scanning started'}</span>
+                  </div>
+                )}
 
                 {/* Expandable Google Client ID Configuration Box */}
                 {showClientIdConfig && (
