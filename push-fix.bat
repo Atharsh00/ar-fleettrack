@@ -12,8 +12,8 @@ cd /d "C:\Users\athar\.gemini\antigravity\scratch\fleet-management"
 echo [1/3] Adding all files...
 git add -A
 
-echo [2/3] Committing MastersTab currentUser fix...
-git commit -m "Fix: Destructure currentUser in MastersTab to prevent ReferenceError"
+echo [2/3] Committing Option 1 1-Click Connect Gmail feature...
+git commit -m "Feature: Implement Option 1 1-Click Connect Gmail in-app auto sync"
 
 echo [3/3] Pushing to GitHub main branch...
 git push -u origin main
@@ -21,7 +21,7 @@ git push -u origin main
 echo.
 echo ==============================================================================
 echo Done! Please check https://github.com/Atharsh00/ar-fleettrack
-echo The latest commit will show: "Fix: Escape less-than symbol in JSX"
+echo The latest commit will show: "Feature: Implement Option 1 1-Click Connect Gmail in-app auto sync"
 echo ==============================================================================
 echo.
 pause

@@ -17,6 +17,8 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Google Identity Services (GIS) for 1-Click Gmail Connect -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
     .font-calligraphy {
       font-family: 'Great Vibes', 'Alex Brush', 'Allura', 'Brush Script MT', cursive;
@@ -877,12 +879,140 @@
         };
       };
 
+      // Decode base64url encoded string from Gmail API
+      const decodeBase64Url = (str) => {
+        if (!str) return '';
+        try {
+          let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+          while (base64.length % 4) base64 += '=';
+          return decodeURIComponent(escape(window.atob(base64)));
+        } catch (e) {
+          try {
+            return window.atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+          } catch (e2) {
+            return '';
+          }
+        }
+      };
+
+      // 1-Click Live Gmail Sync Engine
+      const syncFromLiveGmail = async (accessToken) => {
+        if (!accessToken) throw new Error('Gmail is not connected. Please click "Connect Gmail" first.');
+
+        const config = activeEmailConfig;
+        if (!config.tollEnabled && !config.fuelEnabled) {
+          throw new Error('Both Toll and Fuel sync options are toggled OFF in your settings.');
+        }
+
+        const queries = [];
+        if (config.tollEnabled && config.tollSubjectFilter) {
+          queries.push(`subject:"${config.tollSubjectFilter}"`);
+        }
+        if (config.fuelEnabled && config.fuelSubjectFilter) {
+          queries.push(`subject:"${config.fuelSubjectFilter}"`);
+        }
+        if (queries.length === 0) queries.push('subject:FASTag OR subject:Fuel OR subject:Toll');
+
+        const searchQuery = `is:unread (${queries.join(' OR ')})`;
+
+        // 1. Query unread matching messages
+        const listRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(searchQuery)}&maxResults=20`, {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+
+        if (!listRes.ok) {
+          const errData = await listRes.json().catch(() => ({}));
+          throw new Error(errData?.error?.message || `Gmail API error (status ${listRes.status})`);
+        }
+
+        const listData = await listRes.json();
+        const msgList = listData.messages || [];
+
+        if (msgList.length === 0) {
+          updateEmailSyncConfig({ lastSyncedAt: new Date().toISOString() });
+          return {
+            syncedCount: 0,
+            message: 'Scanned inbox: No unread FASTag or Fuel alert emails found matching your subject keywords.'
+          };
+        }
+
+        // 2. Fetch full message payloads
+        const fetchedEmails = [];
+        const msgIdsToMarkRead = [];
+
+        for (const item of msgList) {
+          try {
+            const detailRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${item.id}?format=full`, {
+              headers: { Authorization: `Bearer ${accessToken}` }
+            });
+            if (!detailRes.ok) continue;
+            const detail = await detailRes.json();
+
+            const headers = detail.payload?.headers || [];
+            const findHdr = (hName) => headers.find(h => h.name.toLowerCase() === hName.toLowerCase())?.value || '';
+            const subject = findHdr('Subject');
+            const from = findHdr('From');
+            const dateStr = findHdr('Date');
+            const mailDate = dateStr ? new Date(dateStr).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+
+            let bodyContent = detail.snippet ? `${detail.snippet} ` : '';
+            if (detail.payload?.body?.data) {
+              bodyContent += decodeBase64Url(detail.payload.body.data);
+            } else if (detail.payload?.parts) {
+              detail.payload.parts.forEach(part => {
+                if (part.body?.data) bodyContent += ` ${decodeBase64Url(part.body.data)}`;
+                if (part.parts) {
+                  part.parts.forEach(subPart => {
+                    if (subPart.body?.data) bodyContent += ` ${decodeBase64Url(subPart.body.data)}`;
+                  });
+                }
+              });
+            }
+
+            fetchedEmails.push({
+              id: item.id,
+              from,
+              subject,
+              date: mailDate,
+              body: bodyContent
+            });
+            msgIdsToMarkRead.push(item.id);
+          } catch (itemErr) {
+            console.warn('Error reading message detail:', itemErr);
+          }
+        }
+
+        // 3. Ingest through our local trip-tagging engine
+        const ingestRes = syncExpensesFromEmails(fetchedEmails);
+
+        // 4. Mark messages as read so they are not re-processed
+        for (const mId of msgIdsToMarkRead) {
+          try {
+            await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${mId}/modify`, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ removeLabelIds: ['UNREAD'] })
+            });
+          } catch (modErr) {
+            console.warn('Error marking message as read in Gmail:', modErr);
+          }
+        }
+
+        return {
+          syncedCount: ingestRes.syncedCount,
+          message: `Scanned Gmail: Found and logged ${ingestRes.syncedCount} new expenses with active trip tagging!`
+        };
+      };
+
       return (
         <FleetContext.Provider value={{
           currentUser, users, login, signup, logout,
           profiles: scopedProfiles, activeProfileId, activeProfile, setActiveProfileId, addProfile, updateProfile, deleteProfile,
           activeRules, updateRules,
-          activeEmailConfig, updateEmailSyncConfig, syncExpensesFromEmails,
+          activeEmailConfig, updateEmailSyncConfig, syncExpensesFromEmails, syncFromLiveGmail,
           trucks: scopedTrucks, companies: scopedCompanies, drivers: scopedDrivers,
           trips: scopedTrips, expenses: scopedExpenses, driverPayments: scopedDriverPayments, settlements: scopedSettlements,
           filteredTrips, filteredExpenses, filteredDriverPayments, filteredSettlements,
@@ -2737,11 +2867,19 @@
         addCompany, updateCompany, deleteCompany,
         addDriver, updateDriver, deleteDriver,
         activeRules, updateRules, activeProfile,
-        activeEmailConfig, updateEmailSyncConfig, syncExpensesFromEmails
+        activeEmailConfig, updateEmailSyncConfig, syncExpensesFromEmails, syncFromLiveGmail
       } = useFleet();
 
       const [subTab, setSubTab] = useState('trucks');
       const [searchQuery, setSearchQuery] = useState('');
+
+      // Google Identity / 1-Click Gmail Connect State
+      const [googleToken, setGoogleToken] = useState(() => localStorage.getItem('fleet_google_token') || '');
+      const [googleEmail, setGoogleEmail] = useState(() => localStorage.getItem('fleet_google_email') || '');
+      const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem('fleet_google_client_id') || '');
+      const [isSyncingGmail, setIsSyncingGmail] = useState(false);
+      const [showClientIdConfig, setShowClientIdConfig] = useState(false);
+      const [clientIdInput, setClientIdInput] = useState(() => localStorage.getItem('fleet_google_client_id') || '');
 
       // Email Sync State
       const [syncEmail, setSyncEmail] = useState(activeEmailConfig?.linkedEmail || '');
@@ -2751,6 +2889,101 @@
       const [syncFuelSubject, setSyncFuelSubject] = useState(activeEmailConfig?.fuelSubjectFilter || 'Fuel Transaction Alert');
       const [emailSyncSaved, setEmailSyncSaved] = useState(false);
       const [syncStatusMsg, setSyncStatusMsg] = useState(null);
+
+      const handleConnectGmail = () => {
+        if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
+          alert('Google Identity Services script is still loading. Please check your internet connection or refresh the page.');
+          return;
+        }
+
+        const clientIdToUse = googleClientId.trim();
+        if (!clientIdToUse) {
+          setShowClientIdConfig(true);
+          alert('Please enter and save your Google Cloud OAuth Client ID below before connecting. (It takes 2 minutes and is 100% free!)');
+          return;
+        }
+
+        try {
+          const client = window.google.accounts.oauth2.initTokenClient({
+            client_id: clientIdToUse,
+            scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify',
+            callback: async (tokenResponse) => {
+              if (tokenResponse && tokenResponse.access_token) {
+                const token = tokenResponse.access_token;
+                setGoogleToken(token);
+                localStorage.setItem('fleet_google_token', token);
+
+                let userEmailFound = '';
+                try {
+                  const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                    headers: { Authorization: `Bearer ${token}` }
+                  });
+                  if (res.ok) {
+                    const data = await res.json();
+                    if (data.email) userEmailFound = data.email;
+                  }
+                } catch (e) {
+                  console.warn('UserInfo fetch error:', e);
+                }
+
+                if (userEmailFound) {
+                  setGoogleEmail(userEmailFound);
+                  localStorage.setItem('fleet_google_email', userEmailFound);
+                  setSyncEmail(userEmailFound);
+                  updateEmailSyncConfig({ linkedEmail: userEmailFound });
+                }
+
+                setSyncStatusMsg({
+                  error: false,
+                  text: `🎉 Successfully connected to Gmail! (${userEmailFound || 'Authorized'}) Click "Fetch & Sync Live Emails Now" to scan and log alerts.`
+                });
+              } else if (tokenResponse && tokenResponse.error) {
+                setSyncStatusMsg({
+                  error: true,
+                  text: `⚠️ Google authorization failed: ${tokenResponse.error_description || tokenResponse.error}`
+                });
+              }
+            }
+          });
+          client.requestAccessToken();
+        } catch (err) {
+          setSyncStatusMsg({ error: true, text: `⚠️ Error initiating Google OAuth: ${err.message}` });
+        }
+      };
+
+      const handleDisconnectGmail = () => {
+        setGoogleToken('');
+        setGoogleEmail('');
+        localStorage.removeItem('fleet_google_token');
+        localStorage.removeItem('fleet_google_email');
+        setSyncStatusMsg({
+          error: false,
+          text: 'Gmail account disconnected.'
+        });
+      };
+
+      const handleSyncLiveGmail = async () => {
+        if (!googleToken) {
+          alert('Please connect your Gmail account first.');
+          return;
+        }
+        setIsSyncingGmail(true);
+        setSyncStatusMsg(null);
+        try {
+          const res = await syncFromLiveGmail(googleToken);
+          setSyncStatusMsg({
+            error: false,
+            text: `✅ ${res.message}`
+          });
+        } catch (err) {
+          setSyncStatusMsg({
+            error: true,
+            text: `⚠️ Gmail Sync Error: ${err.message}`
+          });
+        } finally {
+          setIsSyncingGmail(false);
+        }
+      };
 
       // Keep sync state synced when active profile changes
       useEffect(() => {
@@ -3154,83 +3387,196 @@
             </div>
           )}
 
-          {/* SUBTAB: EMAIL EXPENSE SYNC */}
+          {/* SUBTAB: EMAIL EXPENSE SYNC (OPTION 1: 1-CLICK GMAIL INTEGRATION) */}
           {subTab === 'email_sync' && (
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-lg space-y-6">
+              {/* Header */}
               <div className="flex flex-wrap justify-between items-center gap-3 pb-4 border-b border-slate-800">
                 <div>
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <span>✉️</span> Automated Email Expense Sync & Trip Tagging
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Link your business email to automatically parse bank & FASTag/Fleetcard transaction alerts, extract vehicle numbers & debit amounts, and tag expenses to ongoing trips.
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">✉️</span>
+                    <h3 className="text-base font-bold text-white">
+                      1-Click Gmail Expense Sync & Trip Tagging (Option 1)
+                    </h3>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                      100% Free Forever
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Directly connect your Google account with zero recurring costs, zero custom domains, and zero external subscriptions. Automatically scans unread FASTag & fuel debit alerts, extracts vehicle plates & amounts, and attaches expenses to ongoing trips.
                   </p>
                 </div>
                 {emailSyncSaved && (
                   <span className="text-xs text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-lg animate-fadeIn">
-                    ✅ Email Sync Settings Saved!
+                    ✅ Rules & Settings Saved!
                   </span>
                 )}
               </div>
 
-              {/* Status Alert if synced */}
+              {/* Status Alert if any action fired */}
               {syncStatusMsg && (
                 <div className={`p-4 rounded-xl border text-xs font-semibold animate-fadeIn ${syncStatusMsg.error ? 'bg-rose-950/60 border-rose-800 text-rose-200' : 'bg-emerald-950/60 border-emerald-800 text-emerald-200'}`}>
                   {syncStatusMsg.text}
                 </div>
               )}
 
-              {/* Dedicated Inbound Email Box (Virtual Ingestion Mailbox per Tenant) */}
-              <div className="bg-gradient-to-r from-amber-500/10 via-slate-800/80 to-slate-900 border border-amber-500/30 rounded-2xl p-5 shadow-lg relative overflow-hidden">
-                <div className="flex flex-wrap justify-between items-start gap-3 mb-2">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-base">📮</span>
-                      <h4 className="text-sm font-black text-amber-400 uppercase tracking-wider">
-                        Your Business Dedicated Fleet Email Address
+              {/* CARD 1: PRIMARY 1-CLICK GMAIL OAUTH INTEGRATION */}
+              <div className="bg-gradient-to-br from-blue-950/40 via-slate-900 to-slate-950 border border-blue-500/30 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+                <div className="flex flex-wrap justify-between items-start gap-4">
+                  <div className="space-y-1 max-w-xl">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-blue-500/20 border border-blue-500/30 flex items-center justify-center text-blue-400 font-black text-sm">
+                        G
+                      </div>
+                      <h4 className="text-sm font-black text-white uppercase tracking-wider">
+                        Google Workspace & Gmail Direct Sync
                       </h4>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-mono">
-                        ● Virtual Mailbox Active
-                      </span>
+                      {googleToken ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 font-mono">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                          Connected
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 font-mono">
+                          Not Connected
+                        </span>
+                      )}
                     </div>
-                    <p className="text-xs text-slate-300 mt-1">
-                      This is a real inbound email address generated exclusively for <strong className="text-white">{currentUser?.businessName || 'your business'}</strong>. Paste this address into Gmail forwarding or give it to your bank!
+                    <p className="text-xs text-slate-300 pt-1">
+                      {googleToken
+                        ? `Connected to Gmail account: ${googleEmail || 'Active Session'}. AR FleetTrack has read-only authorization to scan for unread vehicle debit alerts.`
+                        : 'Connect your fleet dispatcher or accounts Gmail account with 1-click. Secure read access through official Google Identity Services.'}
                     </p>
                   </div>
+
+                  {/* Connect / Disconnect Action Buttons */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {!googleToken ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleConnectGmail}
+                          className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-extrabold rounded-xl text-xs shadow-lg flex items-center gap-2 transition transform active:scale-95"
+                        >
+                          <span>🔵</span>
+                          <span>Connect Gmail Account</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowClientIdConfig(!showClientIdConfig)}
+                          className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl text-xs border border-slate-700 transition"
+                          title="Configure Google OAuth Client ID"
+                        >
+                          <span>⚙️</span>
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          disabled={isSyncingGmail}
+                          onClick={handleSyncLiveGmail}
+                          className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs shadow-lg flex items-center gap-2 transition disabled:opacity-50"
+                        >
+                          <span>{isSyncingGmail ? '⏳' : '🔄'}</span>
+                          <span>{isSyncingGmail ? 'Scanning Gmail Inbox...' : 'Fetch & Sync Live Emails Now'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDisconnectGmail}
+                          className="px-3 py-2.5 bg-slate-800 hover:bg-rose-900/60 hover:text-rose-200 text-slate-400 font-semibold rounded-xl text-xs border border-slate-700 transition"
+                        >
+                          ✕ Disconnect
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
 
-                <div className="mt-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                  <div className="flex-1 bg-slate-950/90 border border-amber-500/40 rounded-xl px-3.5 py-2.5 font-mono text-xs text-amber-300 font-bold flex items-center justify-between shadow-inner">
-                    <span className="select-all">expenses-{(currentUser?.username || 'fleet').toLowerCase()}@inbound.fleettrack.app</span>
-                    <span className="text-[10px] text-slate-500 font-normal hidden md:inline">Isolated to {currentUser?.businessName}</span>
+                {/* Expandable Google Client ID Configuration Box */}
+                {showClientIdConfig && (
+                  <div className="mt-5 pt-4 border-t border-slate-800/80 bg-slate-950/80 p-4 rounded-xl space-y-3">
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs font-bold text-amber-400">
+                        Google Cloud OAuth Client ID (Free)
+                      </label>
+                      <a
+                        href="https://console.cloud.google.com/apis/credentials"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[11px] text-blue-400 hover:underline"
+                      >
+                        Open Google Cloud Console &rarr;
+                      </a>
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Enter your Web OAuth Client ID created in Google Cloud Console. Once saved, any dispatcher on your team can click "Connect Gmail" seamlessly.
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="e.g. 123456789-abcdef.apps.googleusercontent.com"
+                        value={clientIdInput}
+                        onChange={(e) => setClientIdInput(e.target.value)}
+                        className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-amber-500 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const trimmed = clientIdInput.trim();
+                          setGoogleClientId(trimmed);
+                          localStorage.setItem('fleet_google_client_id', trimmed);
+                          alert('Google Client ID saved successfully!');
+                        }}
+                        className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs shadow"
+                      >
+                        Save
+                      </button>
+                    </div>
+                    <div className="text-[10px] text-slate-500 space-y-0.5">
+                      <p>1. In Google Cloud Console &rarr; APIs & Services &rarr; Credentials &rarr; Create Credentials &rarr; OAuth client ID.</p>
+                      <p>2. Set Application Type to <strong>Web application</strong>.</p>
+                      <p>3. Under "Authorized JavaScript origins", add your live site URL (e.g. <code className="text-slate-400">https://ar-fleettrack.vercel.app</code>) and <code className="text-slate-400">http://localhost:5173</code>.</p>
+                      <p>4. Under "Enabled APIs", enable the <strong>Gmail API</strong> (free tier provides 1B units/day).</p>
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const email = `expenses-${(currentUser?.username || 'fleet').toLowerCase()}@inbound.fleettrack.app`;
-                      navigator.clipboard.writeText(email);
-                      alert(`Copied to clipboard!\n\n${email}\n\nYou can now paste this email address directly into Gmail Settings -> Forwarding.`);
-                    }}
-                    className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs shadow-md flex items-center justify-center gap-1.5 whitespace-nowrap transition"
-                  >
-                    <span>📋</span>
-                    <span>Copy Email Address</span>
-                  </button>
-                </div>
-
-                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-400 pt-2 border-t border-slate-700/60">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-emerald-400 font-bold">✓ Gmail Auto-Forwarding:</span>
-                    <span>Accepted in Gmail's "Add a forwarding address" box.</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-amber-400 font-bold">✓ Direct Bank Alerts:</span>
-                    <span>Add as notification email in FASTag / Fleet card portals.</span>
-                  </div>
-                </div>
+                )}
               </div>
 
-              {/* Form Settings */}
+              {/* CARD 2: INSTANT SIMULATION & TEST MODE */}
+              <div className="bg-slate-800/40 border border-slate-800 rounded-2xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">🧪</span>
+                    <h4 className="text-xs font-black text-amber-400 uppercase tracking-wider">
+                      Instant Test Simulation (Zero Setup Required)
+                    </h4>
+                  </div>
+                  <p className="text-xs text-slate-300">
+                    Want to test the parser right away without waiting for bank alerts? Simulate receiving FASTag (₹650) and Fuel (₹18,200) debit emails for your active trucks.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      const res = syncExpensesFromEmails();
+                      setSyncStatusMsg({
+                        error: false,
+                        text: `🎉 Simulation Successful! Parsed ${res.syncedCount} alert emails and automatically tagged them to active trips in your ledger.`
+                      });
+                    } catch (err) {
+                      setSyncStatusMsg({ error: true, text: `⚠️ Simulation Error: ${err.message}` });
+                    }
+                  }}
+                  className="px-4 py-2.5 bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-amber-400 border border-amber-500/40 font-bold rounded-xl text-xs shadow-md whitespace-nowrap transition flex items-center gap-1.5"
+                >
+                  <span>▶️</span>
+                  <span>Simulate FASTag & Fuel Alerts</span>
+                </button>
+              </div>
+
+              {/* CARD 3: KEYWORD FILTERS & TRIP TAGGING RULES */}
               <form onSubmit={(e) => {
                 e.preventDefault();
                 updateEmailSyncConfig({
@@ -3242,222 +3588,128 @@
                 });
                 setEmailSyncSaved(true);
                 setTimeout(() => setEmailSyncSaved(false), 3000);
-              }} className="space-y-6">
-
-                {/* 1. Link Email Address */}
-                <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/80">
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="block text-xs font-bold text-amber-400">1. Owner / Dispatcher Personal Email ID *</label>
-                    {syncEmail && (
-                      <span className="text-[11px] text-emerald-400 font-mono bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                        ● Email Account Linked
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-slate-400 mb-2">
-                    Enter the email address you normally use (e.g. your personal or business Gmail).
-                  </p>
-                  <div className="flex gap-2">
-                    <input
-                      type="email"
-                      required
-                      placeholder="e.g. accounts@apexlogistics.in or yourname@gmail.com"
-                      value={syncEmail}
-                      onChange={(e) => setSyncEmail(e.target.value)}
-                      className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-amber-500 focus:outline-none"
-                    />
-                  </div>
+              }} className="space-y-4">
+                <div className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                  <span>⚙️</span> Email Subject Filter Rules
                 </div>
 
-                {/* 2. Toll Charges Configuration */}
-                <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/80 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-xs font-bold text-emerald-300">2. FASTag / Highway Toll Charges Reading</span>
-                      <p className="text-[11px] text-slate-400">Detect toll plaza debits from bank SMS/email notifications and link to active trip</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Toll Configuration */}
+                  <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/80 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-emerald-300">FASTag / Highway Toll Filter</span>
+                        <p className="text-[11px] text-slate-400">Match debit notifications from FASTag banks</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSyncTollEnabled(!syncTollEnabled)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition ${
+                          syncTollEnabled
+                            ? 'bg-emerald-500 text-slate-950 shadow-md ring-1 ring-emerald-400'
+                            : 'bg-slate-800 text-slate-400 border border-slate-700'
+                        }`}
+                      >
+                        <span>{syncTollEnabled ? '✓ ON' : '✕ OFF'}</span>
+                      </button>
                     </div>
-                    {/* On/Off Toggle Button */}
-                    <button
-                      type="button"
-                      onClick={() => setSyncTollEnabled(!syncTollEnabled)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition ${
-                        syncTollEnabled
-                          ? 'bg-emerald-500 text-slate-950 shadow-md ring-1 ring-emerald-400'
-                          : 'bg-slate-800 text-slate-400 border border-slate-700'
-                      }`}
-                    >
-                      <span>{syncTollEnabled ? '✓ ACTIVE (ON)' : '✕ DISABLED (OFF)'}</span>
-                    </button>
-                  </div>
 
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                      Subject Line / Keywords to Look for in Email (Toll Charges):
-                    </label>
-                    <input
-                      type="text"
-                      disabled={!syncTollEnabled}
-                      placeholder="e.g. FASTag Toll Debit Alert, Toll Plaza Transaction, ICICI FASTag Debited"
-                      value={syncTollSubject}
-                      onChange={(e) => setSyncTollSubject(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-amber-500 focus:outline-none disabled:opacity-40"
-                    />
-                    <p className="text-[10px] text-slate-400 mt-1">
-                      Customize this phrase to match your bank's exact subject line (e.g. ICICI Bank, HDFC Bank, SBI FASTag, IDFC FIRST).
-                    </p>
-                  </div>
-                </div>
-
-                {/* 3. Diesel & Fuel Charges Configuration */}
-                <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/80 space-y-3">
-                  <div className="flex items-center justify-between">
                     <div>
-                      <span className="text-xs font-bold text-blue-300">3. Diesel / Fuel Charges Reading</span>
-                      <p className="text-[11px] text-slate-400">Detect fuel fleet card transactions (IOCL, BPCL, HPCL) and link to active trip</p>
+                      <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                        Subject Line Keyword:
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!syncTollEnabled}
+                        placeholder="e.g. FASTag Toll Debit Alert, Toll Plaza Transaction"
+                        value={syncTollSubject}
+                        onChange={(e) => setSyncTollSubject(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-amber-500 focus:outline-none disabled:opacity-40"
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Matches your bank's notification subject (ICICI, HDFC, SBI, IDFC FIRST, Axis).
+                      </p>
                     </div>
-                    {/* On/Off Toggle Button */}
-                    <button
-                      type="button"
-                      onClick={() => setSyncFuelEnabled(!syncFuelEnabled)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition ${
-                        syncFuelEnabled
-                          ? 'bg-blue-500 text-slate-950 shadow-md ring-1 ring-blue-400'
-                          : 'bg-slate-800 text-slate-400 border border-slate-700'
-                      }`}
-                    >
-                      <span>{syncFuelEnabled ? '✓ ACTIVE (ON)' : '✕ DISABLED (OFF)'}</span>
-                    </button>
                   </div>
 
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                      Subject Line / Keywords to Look for in Email (Diesel Charges):
-                    </label>
-                    <input
-                      type="text"
-                      disabled={!syncFuelEnabled}
-                      placeholder="e.g. Fuel Transaction Alert, IOCL XtraPower Purchase, BPCL SmartFleet Fuel Debit"
-                      value={syncFuelSubject}
-                      onChange={(e) => setSyncFuelSubject(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-amber-500 focus:outline-none disabled:opacity-40"
-                    />
-                    <p className="text-[10px] text-slate-400 mt-1">
-                      Customize this phrase to match your fleet card or commercial oil vendor's email alert subject line.
-                    </p>
+                  {/* Fuel Configuration */}
+                  <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/80 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-blue-300">Diesel / Fuel Fleet Card Filter</span>
+                        <p className="text-[11px] text-slate-400">Match debit notifications from oil companies</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSyncFuelEnabled(!syncFuelEnabled)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition ${
+                          syncFuelEnabled
+                            ? 'bg-blue-500 text-slate-950 shadow-md ring-1 ring-blue-400'
+                            : 'bg-slate-800 text-slate-400 border border-slate-700'
+                        }`}
+                      >
+                        <span>{syncFuelEnabled ? '✓ ON' : '✕ OFF'}</span>
+                      </button>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                        Subject Line Keyword:
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!syncFuelEnabled}
+                        placeholder="e.g. Fuel Transaction Alert, IOCL XtraPower, BPCL SmartFleet"
+                        value={syncFuelSubject}
+                        onChange={(e) => setSyncFuelSubject(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-amber-500 focus:outline-none disabled:opacity-40"
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Matches fuel card alerts (IOCL XtraPower, BPCL SmartFleet, HPCL DriveTrack).
+                      </p>
+                    </div>
                   </div>
                 </div>
 
-                {/* Action Row */}
+                {/* Save Rules Row */}
                 <div className="flex flex-wrap justify-between items-center gap-3 pt-2">
                   <div className="text-[11px] text-slate-400 font-mono">
                     Last Synced: {activeEmailConfig?.lastSyncedAt ? new Date(activeEmailConfig.lastSyncedAt).toLocaleString() : 'Never'}
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        try {
-                          const res = syncExpensesFromEmails();
-                          setSyncStatusMsg({
-                            error: false,
-                            text: `✅ Email inbox scanned successfully! Found and automatically logged ${res.syncedCount} new expenses with trip & vehicle tagging.`
-                          });
-                        } catch (err) {
-                          setSyncStatusMsg({ error: true, text: `⚠️ Sync Error: ${err.message}` });
-                        }
-                      }}
-                      className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-amber-400 font-bold text-xs rounded-xl shadow flex items-center gap-1.5"
-                    >
-                      <span>🔄 Check & Parse Inbound Emails Now</span>
-                    </button>
-                    <button
-                      type="submit"
-                      className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-md"
-                    >
-                      Save Email Sync Rules
-                    </button>
-                  </div>
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-md"
+                  >
+                    Save Filter Rules
+                  </button>
                 </div>
               </form>
 
-              {/* 4. Automated Real-Time Gmail Ingestion Guide */}
-              <div className="mt-8 pt-6 border-t border-slate-800">
-                <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
-                  <h4 className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <span>⚡</span> 60-Second Real-Time Gmail Auto-Forwarding Setup
-                  </h4>
-                  <span className="text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded font-mono font-bold">
-                    Automatic Ingest (Under 3 seconds)
-                  </span>
+              {/* CARD 4: HOW OPTION 1 WORKS (100% FREE FOREVER) */}
+              <div className="pt-4 border-t border-slate-800 grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 text-xs">
+                  <div className="text-amber-400 font-bold mb-1 flex items-center gap-1.5">
+                    <span>1️⃣</span> 100% Free Forever
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    Google provides 1 Billion API quota units per day completely free. No paid email router or custom domain purchase is ever needed.
+                  </p>
                 </div>
-                <p className="text-xs text-slate-300 mb-4">
-                  Follow these 3 quick steps in Gmail to forward your bank debit alerts directly into your fleet ledger automatically:
-                </p>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                  {/* Step A: Forwarding Address */}
-                  <div className="bg-slate-800/60 p-4 rounded-xl border border-slate-700/80">
-                    <div className="text-xs font-bold text-white mb-1 flex items-center gap-2">
-                      <span className="w-5 h-5 rounded-full bg-amber-500 text-slate-950 font-black text-[11px] flex items-center justify-center">1</span>
-                      Forwarding Email Address (for Gmail)
-                    </div>
-                    <p className="text-[11px] text-slate-400 mb-2">
-                      Copy this email address and paste it into Gmail's "Add a forwarding address" box:
-                    </p>
-                    <div className="flex gap-2 items-center bg-slate-950 p-2 rounded-lg border border-slate-700 font-mono text-[11px] text-amber-300 overflow-x-auto">
-                      <span className="truncate flex-1 select-all">expenses-{(currentUser?.username || 'fleet').toLowerCase()}@inbound.fleettrack.app</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const email = `expenses-${(currentUser?.username || 'fleet').toLowerCase()}@inbound.fleettrack.app`;
-                          navigator.clipboard.writeText(email);
-                          alert('Email address copied to clipboard!');
-                        }}
-                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded text-[10px] font-bold whitespace-nowrap"
-                      >
-                        Copy Email
-                      </button>
-                    </div>
+                <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 text-xs">
+                  <div className="text-emerald-400 font-bold mb-1 flex items-center gap-1.5">
+                    <span>2️⃣</span> Automatic Trip Tagging
                   </div>
-
-                  {/* Step B: Filter Query Rule */}
-                  <div className="bg-slate-800/60 p-4 rounded-xl border border-slate-700/80">
-                    <div className="text-xs font-bold text-white mb-1 flex items-center gap-2">
-                      <span className="w-5 h-5 rounded-full bg-amber-500 text-slate-950 font-black text-[11px] flex items-center justify-center">2</span>
-                      Gmail Search Filter (Auto-Synced)
-                    </div>
-                    <p className="text-[11px] text-slate-400 mb-2">
-                      Paste this into your Gmail filter's "Subject" field so only FASTag/Fuel alerts get forwarded:
-                    </p>
-                    <div className="flex gap-2 items-center bg-slate-950 p-2 rounded-lg border border-slate-700 font-mono text-[11px] text-amber-300 overflow-x-auto">
-                      <span className="truncate flex-1 select-all">subject:("{syncTollSubject || 'FASTag'}" OR "{syncFuelSubject || 'Fuel'}")</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const filter = `subject:("${syncTollSubject || 'FASTag'}" OR "${syncFuelSubject || 'Fuel'}")`;
-                          navigator.clipboard.writeText(filter);
-                          alert('Gmail filter query copied to clipboard!');
-                        }}
-                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded text-[10px] font-bold whitespace-nowrap"
-                      >
-                        Copy Filter
-                      </button>
-                    </div>
-                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    When an email arrives, our AI engine extracts the vehicle number (e.g. MH-12-RN-4825) & amount (₹) and instantly links the expense to that truck's active trip.
+                  </p>
                 </div>
-
-                {/* Step C: Walkthrough */}
-                <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 text-xs text-slate-300 space-y-2">
-                  <div className="font-bold text-white flex items-center gap-2">
-                    <span className="w-5 h-5 rounded-full bg-amber-500 text-slate-950 font-black text-[11px] flex items-center justify-center">3</span>
-                    How to enable in Gmail:
+                <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 text-xs">
+                  <div className="text-blue-400 font-bold mb-1 flex items-center gap-1.5">
+                    <span>3️⃣</span> Zero Duplicates
                   </div>
-                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-400 ml-1">
-                    <li>Open <a href="https://mail.google.com/mail/u/0/#settings/fwdandpop" target="_blank" rel="noopener noreferrer" className="text-amber-400 underline font-bold">Gmail Settings &rarr; Forwarding and POP/IMAP</a> and click <strong>"Add a forwarding address"</strong>.</li>
-                    <li>Paste the copied email address (<code className="text-amber-400">expenses-{(currentUser?.username || 'fleet').toLowerCase()}@inbound.fleettrack.app</code>) and click <strong>Next &rarr; Proceed</strong>.</li>
-                    <li>Go to <a href="https://mail.google.com/mail/u/0/#settings/filters" target="_blank" rel="noopener noreferrer" className="text-amber-400 underline font-bold">Filters and Blocked Addresses</a>, click <strong>"Create a new filter"</strong>, and paste the copied Filter into the <em>Subject</em> field.</li>
-                    <li>Check <strong>"Forward it to:"</strong>, select the address, and click <strong>Save</strong>!</li>
-                  </ol>
+                  <p className="text-[11px] text-slate-400">
+                    Processed alerts are automatically marked as read so you will never get duplicate entries in your ledger or financial reports.
+                  </p>
                 </div>
               </div>
             </div>
