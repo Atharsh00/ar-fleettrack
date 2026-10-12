@@ -3328,6 +3328,87 @@
                   </div>
                 </div>
               </form>
+
+              {/* 4. Automated Real-Time Gmail Ingestion Guide */}
+              <div className="mt-8 pt-6 border-t border-slate-800">
+                <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
+                  <h4 className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <span>⚡</span> Real-Time Gmail Auto-Forwarding Setup (Zero-Touch)
+                  </h4>
+                  <span className="text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded font-mono font-bold">
+                    Automatic Ingest (< 3 seconds)
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 mb-4">
+                  Set up a 1-time rule in your Gmail so that whenever a bank or fuel card alert arrives matching your subject keywords, it automatically forwards to your live Vercel Webhook without any manual work.
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  {/* Step A: Forwarding Address */}
+                  <div className="bg-slate-800/60 p-4 rounded-xl border border-slate-700/80">
+                    <div className="text-xs font-bold text-white mb-1 flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-amber-500 text-slate-950 font-black text-[11px] flex items-center justify-center">1</span>
+                      Your Inbound Webhook Endpoint
+                    </div>
+                    <p className="text-[11px] text-slate-400 mb-2">
+                      Configure this as your destination webhook in SendGrid / Postmark Inbound Streams:
+                    </p>
+                    <div className="flex gap-2 items-center bg-slate-950 p-2 rounded-lg border border-slate-700 font-mono text-[11px] text-slate-200 overflow-x-auto">
+                      <span className="truncate flex-1 select-all">{typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/email?token=sk_live_fleettrack_secret_9921` : '/api/webhooks/email?token=...'}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const url = `${window.location.origin}/api/webhooks/email?token=sk_live_fleettrack_secret_9921`;
+                          navigator.clipboard.writeText(url);
+                          alert('Webhook URL copied to clipboard!');
+                        }}
+                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded text-[10px] font-bold whitespace-nowrap"
+                      >
+                        Copy URL
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Step B: Filter Query Rule */}
+                  <div className="bg-slate-800/60 p-4 rounded-xl border border-slate-700/80">
+                    <div className="text-xs font-bold text-white mb-1 flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-amber-500 text-slate-950 font-black text-[11px] flex items-center justify-center">2</span>
+                      Gmail Search Filter (Auto-Synced)
+                    </div>
+                    <p className="text-[11px] text-slate-400 mb-2">
+                      Paste this into your Gmail filter's "Subject" field to only forward matching debit alerts:
+                    </p>
+                    <div className="flex gap-2 items-center bg-slate-950 p-2 rounded-lg border border-slate-700 font-mono text-[11px] text-amber-300 overflow-x-auto">
+                      <span className="truncate flex-1 select-all">subject:("{syncTollSubject || 'FASTag'}" OR "{syncFuelSubject || 'Fuel'}")</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const filter = `subject:("${syncTollSubject || 'FASTag'}" OR "${syncFuelSubject || 'Fuel'}")`;
+                          navigator.clipboard.writeText(filter);
+                          alert('Gmail filter query copied to clipboard!');
+                        }}
+                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded text-[10px] font-bold whitespace-nowrap"
+                      >
+                        Copy Filter
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Step C: Walkthrough */}
+                <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 text-xs text-slate-300 space-y-2">
+                  <div className="font-bold text-white flex items-center gap-2">
+                    <span className="w-5 h-5 rounded-full bg-amber-500 text-slate-950 font-black text-[11px] flex items-center justify-center">3</span>
+                    How to enable in Gmail (takes 60 seconds):
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-400 ml-1">
+                    <li>Open <a href="https://mail.google.com/mail/u/0/#settings/filters" target="_blank" rel="noopener noreferrer" className="text-amber-400 underline font-bold">Gmail Settings &rarr; Filters and Blocked Addresses</a>.</li>
+                    <li>Click <strong>"Create a new filter"</strong> and paste the copied Gmail Filter into the <em>Subject</em> field.</li>
+                    <li>Click <strong>"Create filter"</strong>, check the box <strong>"Forward it to:"</strong> and select your inbound webhook address.</li>
+                    <li>Click <strong>Save</strong>. Our webhook automatically handles Google's verification request!</li>
+                  </ol>
+                </div>
+              </div>
             </div>
           )}
 

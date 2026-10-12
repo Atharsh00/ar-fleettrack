@@ -112,6 +112,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`[Webhook Inbound] Received email from: "${from}" | To: "${to}" | Subject: "${subject}"`);
 
+    // Handle Gmail Forwarding Confirmation Email
+    const fullBody = `${text || ''} ${html || ''}`;
+    if (
+      from.includes('google.com') ||
+      subject.toLowerCase().includes('gmail forwarding confirmation') ||
+      fullBody.includes('requested to automatically forward mail')
+    ) {
+      console.log('[Gmail Forwarding] Received Google forwarding confirmation email!');
+      const linkMatch = fullBody.match(/https:\/\/mail\.google\.com\/mail\/vf-[a-zA-Z0-9_\-]+/i);
+      const codeMatch = fullBody.match(/Confirmation code:\s*([0-9]{7,12})/i);
+      const code = codeMatch ? codeMatch[1] : null;
+
+      let autoConfirmed = false;
+      if (linkMatch && linkMatch[0]) {
+        try {
+          await fetch(linkMatch[0]);
+          autoConfirmed = true;
+          console.log('[Gmail Forwarding] Auto-confirmed forwarding link successfully with Google!');
+        } catch (fetchErr) {
+          console.warn('[Gmail Forwarding] Auto-confirmation fetch error:', fetchErr);
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        type: 'GMAIL_FORWARDING_CONFIRMATION',
+        message: autoConfirmed
+          ? 'Gmail forwarding address was automatically confirmed with Google!'
+          : `Gmail confirmation code extracted: ${code}`,
+        confirmationCode: code,
+        confirmationUrl: linkMatch ? linkMatch[0] : null,
+      });
+    }
+
     // 2. Parse Email Content using Regex and Pattern Extractor
     const parsed = parseInboundEmail(subject, text, html, date);
 
