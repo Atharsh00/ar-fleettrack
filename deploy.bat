@@ -39,7 +39,7 @@ git add -A
 
 :: 5. Create the Commit
 echo [2/3] Creating commit...
-git commit -m "Initial commit: AR FleetTrack with Vercel Webhook API"
+git commit -m "Fix: Switch Prisma datasource to postgresql for Vercel Prisma Postgres"
 
 :: 6. Check if remote origin is set
 git remote get-url origin >nul 2>nul

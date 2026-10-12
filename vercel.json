@@ -1,4 +1,4 @@
 {
   "framework": "vite",
-  "buildCommand": "prisma generate && tsc && vite build"
+  "buildCommand": "prisma generate && vite build"
 }
