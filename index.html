@@ -3179,6 +3179,56 @@
                 </div>
               )}
 
+              {/* Dedicated Inbound Email Box (Virtual Ingestion Mailbox per Tenant) */}
+              <div className="bg-gradient-to-r from-amber-500/10 via-slate-800/80 to-slate-900 border border-amber-500/30 rounded-2xl p-5 shadow-lg relative overflow-hidden">
+                <div className="flex flex-wrap justify-between items-start gap-3 mb-2">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">📮</span>
+                      <h4 className="text-sm font-black text-amber-400 uppercase tracking-wider">
+                        Your Business Dedicated Fleet Email Address
+                      </h4>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-mono">
+                        ● Virtual Mailbox Active
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-300 mt-1">
+                      This is a real inbound email address generated exclusively for <strong className="text-white">{currentUser?.businessName || 'your business'}</strong>. Paste this address into Gmail forwarding or give it to your bank!
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <div className="flex-1 bg-slate-950/90 border border-amber-500/40 rounded-xl px-3.5 py-2.5 font-mono text-xs text-amber-300 font-bold flex items-center justify-between shadow-inner">
+                    <span className="select-all">expenses-{(currentUser?.username || 'fleet').toLowerCase()}@inbound.fleettrack.app</span>
+                    <span className="text-[10px] text-slate-500 font-normal hidden md:inline">Isolated to {currentUser?.businessName}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const email = `expenses-${(currentUser?.username || 'fleet').toLowerCase()}@inbound.fleettrack.app`;
+                      navigator.clipboard.writeText(email);
+                      alert(`Copied to clipboard!\n\n${email}\n\nYou can now paste this email address directly into Gmail Settings -> Forwarding.`);
+                    }}
+                    className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs shadow-md flex items-center justify-center gap-1.5 whitespace-nowrap transition"
+                  >
+                    <span>📋</span>
+                    <span>Copy Email Address</span>
+                  </button>
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-400 pt-2 border-t border-slate-700/60">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-emerald-400 font-bold">✓ Gmail Auto-Forwarding:</span>
+                    <span>Accepted in Gmail's "Add a forwarding address" box.</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-amber-400 font-bold">✓ Direct Bank Alerts:</span>
+                    <span>Add as notification email in FASTag / Fleet card portals.</span>
+                  </div>
+                </div>
+              </div>
+
               {/* Form Settings */}
               <form onSubmit={(e) => {
                 e.preventDefault();
@@ -3196,7 +3246,7 @@
                 {/* 1. Link Email Address */}
                 <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/80">
                   <div className="flex justify-between items-center mb-1">
-                    <label className="block text-xs font-bold text-amber-400">1. Linked Business / FASTag Email ID *</label>
+                    <label className="block text-xs font-bold text-amber-400">1. Owner / Dispatcher Personal Email ID *</label>
                     {syncEmail && (
                       <span className="text-[11px] text-emerald-400 font-mono bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
                         ● Email Account Linked
@@ -3204,13 +3254,13 @@
                     )}
                   </div>
                   <p className="text-[11px] text-slate-400 mb-2">
-                    Enter the email inbox where your bank/FASTag debit alerts and fuel transaction slips arrive.
+                    Enter the email address you normally use (e.g. your personal or business Gmail).
                   </p>
                   <div className="flex gap-2">
                     <input
                       type="email"
                       required
-                      placeholder="e.g. accounts@apexlogistics.in or fastag-alerts@company.com"
+                      placeholder="e.g. accounts@apexlogistics.in or yourname@gmail.com"
                       value={syncEmail}
                       onChange={(e) => setSyncEmail(e.target.value)}
                       className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-amber-500 focus:outline-none"
@@ -3333,14 +3383,14 @@
               <div className="mt-8 pt-6 border-t border-slate-800">
                 <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
                   <h4 className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <span>⚡</span> Real-Time Gmail Auto-Forwarding Setup (Zero-Touch)
+                    <span>⚡</span> 60-Second Real-Time Gmail Auto-Forwarding Setup
                   </h4>
                   <span className="text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded font-mono font-bold">
                     Automatic Ingest (Under 3 seconds)
                   </span>
                 </div>
                 <p className="text-xs text-slate-300 mb-4">
-                  Set up a 1-time rule in your Gmail so that whenever a bank or fuel card alert arrives matching your subject keywords, it automatically forwards to your live Vercel Webhook without any manual work.
+                  Follow these 3 quick steps in Gmail to forward your bank debit alerts directly into your fleet ledger automatically:
                 </p>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
@@ -3348,23 +3398,23 @@
                   <div className="bg-slate-800/60 p-4 rounded-xl border border-slate-700/80">
                     <div className="text-xs font-bold text-white mb-1 flex items-center gap-2">
                       <span className="w-5 h-5 rounded-full bg-amber-500 text-slate-950 font-black text-[11px] flex items-center justify-center">1</span>
-                      Your Inbound Webhook Endpoint
+                      Forwarding Email Address (for Gmail)
                     </div>
                     <p className="text-[11px] text-slate-400 mb-2">
-                      Configure this as your destination webhook in SendGrid / Postmark Inbound Streams:
+                      Copy this email address and paste it into Gmail's "Add a forwarding address" box:
                     </p>
-                    <div className="flex gap-2 items-center bg-slate-950 p-2 rounded-lg border border-slate-700 font-mono text-[11px] text-slate-200 overflow-x-auto">
-                      <span className="truncate flex-1 select-all">{typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/email?token=sk_live_fleettrack_secret_9921` : '/api/webhooks/email?token=...'}</span>
+                    <div className="flex gap-2 items-center bg-slate-950 p-2 rounded-lg border border-slate-700 font-mono text-[11px] text-amber-300 overflow-x-auto">
+                      <span className="truncate flex-1 select-all">expenses-{(currentUser?.username || 'fleet').toLowerCase()}@inbound.fleettrack.app</span>
                       <button
                         type="button"
                         onClick={() => {
-                          const url = `${window.location.origin}/api/webhooks/email?token=sk_live_fleettrack_secret_9921`;
-                          navigator.clipboard.writeText(url);
-                          alert('Webhook URL copied to clipboard!');
+                          const email = `expenses-${(currentUser?.username || 'fleet').toLowerCase()}@inbound.fleettrack.app`;
+                          navigator.clipboard.writeText(email);
+                          alert('Email address copied to clipboard!');
                         }}
                         className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded text-[10px] font-bold whitespace-nowrap"
                       >
-                        Copy URL
+                        Copy Email
                       </button>
                     </div>
                   </div>
@@ -3376,7 +3426,7 @@
                       Gmail Search Filter (Auto-Synced)
                     </div>
                     <p className="text-[11px] text-slate-400 mb-2">
-                      Paste this into your Gmail filter's "Subject" field to only forward matching debit alerts:
+                      Paste this into your Gmail filter's "Subject" field so only FASTag/Fuel alerts get forwarded:
                     </p>
                     <div className="flex gap-2 items-center bg-slate-950 p-2 rounded-lg border border-slate-700 font-mono text-[11px] text-amber-300 overflow-x-auto">
                       <span className="truncate flex-1 select-all">subject:("{syncTollSubject || 'FASTag'}" OR "{syncFuelSubject || 'Fuel'}")</span>
@@ -3399,13 +3449,13 @@
                 <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 text-xs text-slate-300 space-y-2">
                   <div className="font-bold text-white flex items-center gap-2">
                     <span className="w-5 h-5 rounded-full bg-amber-500 text-slate-950 font-black text-[11px] flex items-center justify-center">3</span>
-                    How to enable in Gmail (takes 60 seconds):
+                    How to enable in Gmail:
                   </div>
                   <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-400 ml-1">
-                    <li>Open <a href="https://mail.google.com/mail/u/0/#settings/filters" target="_blank" rel="noopener noreferrer" className="text-amber-400 underline font-bold">Gmail Settings &rarr; Filters and Blocked Addresses</a>.</li>
-                    <li>Click <strong>"Create a new filter"</strong> and paste the copied Gmail Filter into the <em>Subject</em> field.</li>
-                    <li>Click <strong>"Create filter"</strong>, check the box <strong>"Forward it to:"</strong> and select your inbound webhook address.</li>
-                    <li>Click <strong>Save</strong>. Our webhook automatically handles Google's verification request!</li>
+                    <li>Open <a href="https://mail.google.com/mail/u/0/#settings/fwdandpop" target="_blank" rel="noopener noreferrer" className="text-amber-400 underline font-bold">Gmail Settings &rarr; Forwarding and POP/IMAP</a> and click <strong>"Add a forwarding address"</strong>.</li>
+                    <li>Paste the copied email address (<code className="text-amber-400">expenses-{(currentUser?.username || 'fleet').toLowerCase()}@inbound.fleettrack.app</code>) and click <strong>Next &rarr; Proceed</strong>.</li>
+                    <li>Go to <a href="https://mail.google.com/mail/u/0/#settings/filters" target="_blank" rel="noopener noreferrer" className="text-amber-400 underline font-bold">Filters and Blocked Addresses</a>, click <strong>"Create a new filter"</strong>, and paste the copied Filter into the <em>Subject</em> field.</li>
+                    <li>Check <strong>"Forward it to:"</strong>, select the address, and click <strong>Save</strong>!</li>
                   </ol>
                 </div>
               </div>

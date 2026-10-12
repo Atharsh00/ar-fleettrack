@@ -33,15 +33,22 @@ export async function resolveProfileForInboundEmail(
 
   if (company) return company.profileId;
 
-  // 2. Check if the 'To' address has a profile slug (e.g. `prof_apex@inbound.fleettrack.com`)
+  // 2. Check if the 'To' address has a dedicated tenant slug (e.g. `expenses-apex@inbound.fleettrack.app`)
   const slugMatch = toAddress.match(/([a-zA-Z0-9_\-]+)@/);
   if (slugMatch) {
-    const slug = slugMatch[1].toLowerCase();
+    const rawSlug = slugMatch[1].toLowerCase();
+    // Strip common prefixes: expenses-, sync-, fleet-
+    const cleanSlug = rawSlug.replace(/^(expenses|sync|fleet)[_-]/, '');
+
+    // Search profile by clean slug, raw slug, or exact id
     const profile = await prisma.profile.findFirst({
       where: {
-        name: {
-          contains: slug,
-        },
+        OR: [
+          { id: rawSlug },
+          { id: cleanSlug },
+          { name: { contains: cleanSlug, mode: 'insensitive' } },
+          { name: { contains: rawSlug, mode: 'insensitive' } },
+        ],
       },
       select: { id: true },
     });
