@@ -516,7 +516,7 @@
         const totalDirectExpenses = filteredExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
         const totalPendingRentFromTrips = filteredTrips.reduce((s, t) => {
           const reimb = scopedExpenses.filter(e => e.tripId === t.id && e.isReimbursable).reduce((sum, e) => sum + Number(e.amount || 0), 0);
-          return s + Math.max(0, Number(t.totalRent || 0) + reimb - Number(t.advanceReceived || 0) - Number(t.commissionAmount || 0) - Number(t.tdsAmount || 0));
+          return s + Math.max(0, Number(t.totalRent || 0) + reimb - Number(t.advanceReceived || 0) - Number(t.receivedAmount || 0) - Number(t.commissionAmount || 0) - Number(t.tdsAmount || 0));
         }, 0);
         const totalSettlementsInPeriod = filteredSettlements.reduce((s, st) => s + Number(st.amount || 0), 0);
         const totalCompanyReceivables = Math.max(0, totalPendingRentFromTrips - totalSettlementsInPeriod);
@@ -543,22 +543,24 @@
       }, [filteredTrips, filteredExpenses, filteredDriverPayments, filteredSettlements, scopedExpenses]);
 
       // Recomputation Helper
-      const computeTripFields = (gross, comm, isTds, adv) => {
+      const computeTripFields = (gross, comm, isTds, adv, received = 0) => {
         const g = Number(gross) || 0;
         const c = Number(comm) || 0;
         const a = Number(adv) || 0;
+        const r = Number(received) || 0;
         const tdsAmount = isTds ? (g * (activeRules.defaultTdsPercent / 100)) : 0;
         const netRent = Math.max(0, g - tdsAmount - c);
         const driverCommission = netRent * (activeRules.defaultDriverSalaryPercent / 100);
-        // Receivables Formula: Balance Due = Total Rent - Advance Received - Commission - TDS
-        const balancePending = Math.max(0, g - a - c - tdsAmount);
+        // Receivables Formula: Balance Due = Total Rent - Advance Received - Amount Received from Company - Commission - TDS
+        const balancePending = Math.max(0, g - a - r - c - tdsAmount);
         return { tdsAmount, netRent, driverCommission, balancePending };
       };
 
       // Trip Actions
       const addTrip = (input) => {
+        const recAmt = Number(input.receivedAmount || 0);
         const { tdsAmount, netRent, driverCommission, balancePending } = computeTripFields(
-          input.totalRent, input.commissionAmount, input.isTdsDeducted, input.advanceReceived
+          input.totalRent, input.commissionAmount, input.isTdsDeducted, input.advanceReceived, recAmt
         );
 
         if (!scopedCompanies.some(c => c.name.toLowerCase() === input.companyName.trim().toLowerCase())) {
@@ -586,6 +588,7 @@
           commissionAmount: Number(input.commissionAmount) || 0,
           isTdsDeducted: Boolean(input.isTdsDeducted),
           advanceReceived: Number(input.advanceReceived) || 0,
+          receivedAmount: recAmt,
           tdsAmount,
           netRent,
           driverCommission,
@@ -601,12 +604,13 @@
         setTrips(prev => prev.map(t => {
           if (t.id !== id) return t;
           const merged = { ...t, ...updates };
+          const recAmt = Number(merged.receivedAmount || 0);
           const { tdsAmount, netRent, driverCommission, balancePending } = computeTripFields(
-            merged.totalRent, merged.commissionAmount, merged.isTdsDeducted, merged.advanceReceived
+            merged.totalRent, merged.commissionAmount, merged.isTdsDeducted, merged.advanceReceived, recAmt
           );
           const drops = (merged.additionalDrops || []).filter(Boolean);
           const route = [merged.fromLocation, ...drops, merged.toLocation].filter(Boolean).join(' -> ');
-          return { ...merged, route: route || merged.route, tdsAmount, netRent, driverCommission, balancePending };
+          return { ...merged, route: route || merged.route, receivedAmount: recAmt, tdsAmount, netRent, driverCommission, balancePending };
         }));
       };
 
@@ -761,9 +765,10 @@
         const reimb = getTripReimbursable(trip.id);
         const g = Number(trip.totalRent || 0);
         const a = Number(trip.advanceReceived || 0);
+        const r = Number(trip.receivedAmount || 0);
         const c = Number(trip.commissionAmount || 0);
         const tds = Number(trip.tdsAmount || 0);
-        return Math.max(0, g + reimb - a - c - tds);
+        return Math.max(0, g + reimb - a - r - c - tds);
       };
       const getTripProfit = (tripOrId) => {
         if (!tripOrId) return 0;
@@ -1164,10 +1169,28 @@
       );
     }
 
+    // --- SHARED COLUMN FILTER INPUT HELPER ---
+    function ColFilterInput({ value, onChange, placeholder = "Filter...", className = "" }) {
+      return (
+        <input
+          type="text"
+          value={value || ''}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className={`w-full bg-slate-950/90 border border-slate-700/80 rounded px-1.5 py-0.5 text-[10px] text-white placeholder-slate-500 font-normal focus:outline-none focus:border-amber-400 ${className}`}
+        />
+      );
+    }
+
     // --- TAB 2: TRUCK PERFORMANCE (STATUS BADGE REMOVED) ---
     function TruckPerformanceTab() {
-      const { trucks, filteredTrips, filteredExpenses, getCompanyName, getTripExpenses, getTripProfit } = useFleet();
+      const { trucks, filteredTrips, filteredExpenses, getCompanyName, getTripExpenses, getTripProfit, getTripBalancePending } = useFleet();
       const [selTruck, setSelTruck] = useState('all');
+
+      // Column filter states
+      const [fleetFilters, setFleetFilters] = useState({});
+      const [tripColFilters, setTripColFilters] = useState({});
+      const [expColFilters, setExpColFilters] = useState({});
 
       const truckData = trucks.map(trk => {
         const trkTrips = filteredTrips.filter(t => t.truckId === trk.id);
@@ -1179,12 +1202,26 @@
         return { trk, trips: trkTrips, expenses: trkExpenses, rev, exp, profit, margin };
       });
 
+      // Filtered truckData based on fleetFilters
+      const filteredTruckData = useMemo(() => {
+        return truckData.filter(td => {
+          if (fleetFilters.reg && !td.trk.registrationNumber.toLowerCase().includes(fleetFilters.reg.toLowerCase())) return false;
+          if (fleetFilters.model && !`${td.trk.model} ${td.trk.capacity}`.toLowerCase().includes(fleetFilters.model.toLowerCase())) return false;
+          if (fleetFilters.trips && !String(td.trips.length).includes(fleetFilters.trips)) return false;
+          if (fleetFilters.rev && !String(td.rev).includes(fleetFilters.rev)) return false;
+          if (fleetFilters.exp && !String(td.exp).includes(fleetFilters.exp)) return false;
+          if (fleetFilters.profit && !String(td.profit).includes(fleetFilters.profit)) return false;
+          if (fleetFilters.margin && !String(Math.round(td.margin)).includes(fleetFilters.margin)) return false;
+          return true;
+        });
+      }, [truckData, fleetFilters]);
+
       const activeView = selTruck === 'all' ? null : truckData.find(d => d.trk.id === selTruck);
 
-      // Calculations for Fleet Overview Totals Row
-      const fleetTotalTrips = truckData.reduce((s, td) => s + td.trips.length, 0);
-      const fleetTotalRev = truckData.reduce((s, td) => s + td.rev, 0);
-      const fleetTotalExp = truckData.reduce((s, td) => s + td.exp, 0);
+      // Calculations for Fleet Overview Totals Row (dynamically recalculates from filteredTruckData)
+      const fleetTotalTrips = filteredTruckData.reduce((s, td) => s + td.trips.length, 0);
+      const fleetTotalRev = filteredTruckData.reduce((s, td) => s + td.rev, 0);
+      const fleetTotalExp = filteredTruckData.reduce((s, td) => s + td.exp, 0);
       const fleetTotalProfit = fleetTotalRev - fleetTotalExp;
       const fleetTotalMargin = fleetTotalRev > 0 ? (fleetTotalProfit / fleetTotalRev) * 100 : 0;
 
@@ -1192,14 +1229,61 @@
       const displayedTrips = selTruck === 'all' ? filteredTrips : filteredTrips.filter(t => t.truckId === selTruck);
       const displayedExpenses = selTruck === 'all' ? filteredExpenses : filteredExpenses.filter(e => e.truckId === selTruck);
 
-      // Itemized Trips Totals
-      const tripsTotalRent = displayedTrips.reduce((s, t) => s + Number(t.totalRent || 0), 0);
-      const tripsTotalExp = displayedTrips.reduce((s, t) => s + Number(getTripExpenses ? getTripExpenses(t.id) : 0), 0);
-      const tripsTotalProfit = displayedTrips.reduce((s, t) => s + Number(getTripProfit ? getTripProfit(t) : 0), 0);
-      const tripsTotalPending = displayedTrips.reduce((s, t) => s + Number(t.balancePending || 0), 0);
+      // Itemized Trips with Column Filters
+      const filteredItemizedTrips = useMemo(() => {
+        return displayedTrips.filter(t => {
+          const directExp = Number(getTripExpenses ? getTripExpenses(t.id) : 0);
+          const comm = Number(t.commissionAmount || 0);
+          const drvSal = Number(t.driverCommission || 0);
+          const tds = Number(t.tdsAmount || 0);
+          const tripExp = directExp + comm + drvSal + tds;
+          const tripProfit = getTripProfit ? getTripProfit(t) : (Number(t.totalRent || 0) - tripExp);
+          const compDisplay = getCompanyName ? getCompanyName(t.companyName || t.companyId) : (t.companyName || t.companyId);
+          const receivedSoFar = Number(t.advanceReceived || 0) + Number(t.receivedAmount || 0);
+          const balDue = getTripBalancePending ? getTripBalancePending(t) : Number(t.balancePending || 0);
 
-      // Itemized Expenses Totals
-      const expensesTotalAmt = displayedExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+          if (tripColFilters.date && !String(t.date || '').toLowerCase().includes(tripColFilters.date.toLowerCase())) return false;
+          if (tripColFilters.company && !String(compDisplay || '').toLowerCase().includes(tripColFilters.company.toLowerCase())) return false;
+          if (tripColFilters.route && !String(t.route || '').toLowerCase().includes(tripColFilters.route.toLowerCase())) return false;
+          if (tripColFilters.rent && !String(t.totalRent || '').includes(tripColFilters.rent)) return false;
+          if (tripColFilters.tripExp && !String(tripExp).includes(tripColFilters.tripExp)) return false;
+          if (tripColFilters.tripProfit && !String(tripProfit).includes(tripColFilters.tripProfit)) return false;
+          if (tripColFilters.received && !String(receivedSoFar).includes(tripColFilters.received)) return false;
+          if (tripColFilters.pending && !String(balDue).includes(tripColFilters.pending)) return false;
+          return true;
+        });
+      }, [displayedTrips, tripColFilters, getTripExpenses, getTripProfit, getCompanyName, getTripBalancePending]);
+
+      // Itemized Trips Totals (dynamically calculated over filteredItemizedTrips)
+      const tripsTotalRent = filteredItemizedTrips.reduce((s, t) => s + Number(t.totalRent || 0), 0);
+      const tripsTotalReceived = filteredItemizedTrips.reduce((s, t) => s + Number(t.advanceReceived || 0) + Number(t.receivedAmount || 0), 0);
+      const tripsTotalExp = filteredItemizedTrips.reduce((s, t) => {
+        const directExp = Number(getTripExpenses ? getTripExpenses(t.id) : 0);
+        const comm = Number(t.commissionAmount || 0);
+        const drvSal = Number(t.driverCommission || 0);
+        const tds = Number(t.tdsAmount || 0);
+        return s + directExp + comm + drvSal + tds;
+      }, 0);
+      const tripsTotalProfit = filteredItemizedTrips.reduce((s, t) => s + Number(getTripProfit ? getTripProfit(t) : 0), 0);
+      const tripsTotalPending = filteredItemizedTrips.reduce((s, t) => s + Number(getTripBalancePending ? getTripBalancePending(t) : t.balancePending || 0), 0);
+
+      // Itemized Expenses with Column Filters
+      const filteredItemizedExpenses = useMemo(() => {
+        return displayedExpenses.filter(e => {
+          if (expColFilters.date && !String(e.date || '').toLowerCase().includes(expColFilters.date.toLowerCase())) return false;
+          if (expColFilters.category && !String(e.category || '').toLowerCase().includes(expColFilters.category.toLowerCase())) return false;
+          if (expColFilters.notes && !String(e.notes || e.paymentMethod || '').toLowerCase().includes(expColFilters.notes.toLowerCase())) return false;
+          if (expColFilters.amount && !String(e.amount || '').includes(expColFilters.amount)) return false;
+          return true;
+        });
+      }, [displayedExpenses, expColFilters]);
+
+      // Itemized Expenses Totals (dynamically calculated over filteredItemizedExpenses)
+      const expensesTotalAmt = filteredItemizedExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+
+      const hasFleetFilters = Object.values(fleetFilters).some(Boolean);
+      const hasTripFilters = Object.values(tripColFilters).some(Boolean);
+      const hasExpFilters = Object.values(expColFilters).some(Boolean);
 
       return (
         <div className="space-y-6">
@@ -1264,9 +1348,25 @@
                     <th className="py-2.5 px-3 text-right">Margin %</th>
                     <th className="py-2.5 px-3 text-center">Action</th>
                   </tr>
+                  <tr className="bg-slate-900/90 border-b border-slate-800">
+                    <th className="p-1.5"><ColFilterInput value={fleetFilters.reg} onChange={v => setFleetFilters({...fleetFilters, reg: v})} placeholder="Filter reg..." /></th>
+                    <th className="p-1.5"><ColFilterInput value={fleetFilters.model} onChange={v => setFleetFilters({...fleetFilters, model: v})} placeholder="Filter model..." /></th>
+                    <th className="p-1.5"><ColFilterInput value={fleetFilters.trips} onChange={v => setFleetFilters({...fleetFilters, trips: v})} placeholder="Trips..." className="text-center" /></th>
+                    <th className="p-1.5"><ColFilterInput value={fleetFilters.rev} onChange={v => setFleetFilters({...fleetFilters, rev: v})} placeholder="Rev..." className="text-right" /></th>
+                    <th className="p-1.5"><ColFilterInput value={fleetFilters.exp} onChange={v => setFleetFilters({...fleetFilters, exp: v})} placeholder="Exp..." className="text-right" /></th>
+                    <th className="p-1.5"><ColFilterInput value={fleetFilters.profit} onChange={v => setFleetFilters({...fleetFilters, profit: v})} placeholder="Profit..." className="text-right" /></th>
+                    <th className="p-1.5"><ColFilterInput value={fleetFilters.margin} onChange={v => setFleetFilters({...fleetFilters, margin: v})} placeholder="Margin %" className="text-right" /></th>
+                    <th className="p-1.5 text-center">
+                      {hasFleetFilters && (
+                        <button onClick={() => setFleetFilters({})} className="text-[10px] text-amber-400 hover:underline font-bold">
+                          ✕ Clear
+                        </button>
+                      )}
+                    </th>
+                  </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
-                  {truckData.map(td => (
+                  {filteredTruckData.map(td => (
                     <tr key={td.trk.id} className="hover:bg-slate-800/40">
                       <td className="py-3 px-3 font-mono font-bold text-white">{td.trk.registrationNumber}</td>
                       <td className="py-3 px-3 text-slate-400">{td.trk.model} ({td.trk.capacity})</td>
@@ -1291,7 +1391,7 @@
                 <tfoot className="bg-slate-950/90 font-bold border-t-2 border-slate-700 text-white">
                   <tr>
                     <td colSpan="2" className="py-3 px-3 text-amber-400 uppercase tracking-wider text-[11px] font-black">
-                      Total ({truckData.length} Vehicles)
+                      Total ({filteredTruckData.length} Vehicles)
                     </td>
                     <td className="py-3 px-3 text-center font-mono font-black text-amber-300">{fleetTotalTrips}</td>
                     <td className="py-3 px-3 text-right font-mono font-black text-white">{formatCurr(fleetTotalRev)}</td>
@@ -1321,40 +1421,72 @@
                       <th className="p-2 text-right">Rent</th>
                       <th className="p-2 text-right">Trip Exp</th>
                       <th className="p-2 text-right">Trip Profit</th>
+                      <th className="p-2 text-right">Received</th>
                       <th className="p-2 text-right">Pending</th>
+                    </tr>
+                    <tr className="bg-slate-900/90 border-b border-slate-800">
+                      <th className="p-1"><ColFilterInput value={tripColFilters.date} onChange={v => setTripColFilters({...tripColFilters, date: v})} placeholder="Date..." /></th>
+                      <th className="p-1"><ColFilterInput value={tripColFilters.company} onChange={v => setTripColFilters({...tripColFilters, company: v})} placeholder="Company..." /></th>
+                      <th className="p-1"><ColFilterInput value={tripColFilters.route} onChange={v => setTripColFilters({...tripColFilters, route: v})} placeholder="Route..." /></th>
+                      <th className="p-1"><ColFilterInput value={tripColFilters.rent} onChange={v => setTripColFilters({...tripColFilters, rent: v})} placeholder="Rent..." className="text-right" /></th>
+                      <th className="p-1"><ColFilterInput value={tripColFilters.tripExp} onChange={v => setTripColFilters({...tripColFilters, tripExp: v})} placeholder="Exp..." className="text-right" /></th>
+                      <th className="p-1"><ColFilterInput value={tripColFilters.tripProfit} onChange={v => setTripColFilters({...tripColFilters, tripProfit: v})} placeholder="Profit..." className="text-right" /></th>
+                      <th className="p-1"><ColFilterInput value={tripColFilters.received} onChange={v => setTripColFilters({...tripColFilters, received: v})} placeholder="Recvd..." className="text-right" /></th>
+                      <th className="p-1">
+                        <div className="flex items-center gap-1">
+                          <ColFilterInput value={tripColFilters.pending} onChange={v => setTripColFilters({...tripColFilters, pending: v})} placeholder="Pending..." className="text-right" />
+                          {hasTripFilters && (
+                            <button onClick={() => setTripColFilters({})} title="Clear filters" className="text-[9px] text-amber-400 hover:underline font-bold px-0.5">✕</button>
+                          )}
+                        </div>
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
-                    {displayedTrips.map(t => {
-                      const tripExp = getTripExpenses ? getTripExpenses(t.id) : 0;
-                      const tripProfit = getTripProfit ? getTripProfit(t) : 0;
+                    {filteredItemizedTrips.map(t => {
+                      const directExp = Number(getTripExpenses ? getTripExpenses(t.id) : 0);
+                      const comm = Number(t.commissionAmount || 0);
+                      const drvSal = Number(t.driverCommission || 0);
+                      const tds = Number(t.tdsAmount || 0);
+                      // Total Trip Cost: direct expenses + commission + driver salary + TDS
+                      const tripExp = directExp + comm + drvSal + tds;
+                      const tripProfit = getTripProfit ? getTripProfit(t) : (Number(t.totalRent || 0) - tripExp);
                       const compDisplay = getCompanyName ? getCompanyName(t.companyName || t.companyId) : (t.companyName || t.companyId);
+                      const receivedSoFar = Number(t.advanceReceived || 0) + Number(t.receivedAmount || 0);
+                      const balDue = getTripBalancePending ? getTripBalancePending(t) : Number(t.balancePending || 0);
+
                       return (
                         <tr key={t.id} className="hover:bg-slate-800/40">
                           <td className="p-2 font-mono text-slate-400 whitespace-nowrap">{t.date}</td>
                           <td className="p-2 font-medium text-amber-400 whitespace-nowrap">{compDisplay}</td>
                           <td className="p-2 font-medium text-white">{t.route}</td>
                           <td className="p-2 text-right font-mono text-white font-bold">{formatCurr(t.totalRent)}</td>
-                          <td className="p-2 text-right font-mono text-rose-400">{formatCurr(tripExp)}</td>
+                          <td className="p-2 text-right font-mono text-rose-400" title={`Direct: ${formatCurr(directExp)} | Comm: ${formatCurr(comm)} | Driver: ${formatCurr(drvSal)} | TDS: ${formatCurr(tds)}`}>
+                            {formatCurr(tripExp)}
+                          </td>
                           <td className={`p-2 text-right font-mono font-bold ${tripProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                             {formatCurr(tripProfit)}
                           </td>
-                          <td className="p-2 text-right font-mono text-amber-400 font-bold">{formatCurr(t.balancePending)}</td>
+                          <td className="p-2 text-right font-mono text-emerald-400 font-bold" title={`Advance: ${formatCurr(t.advanceReceived || 0)} + Received: ${formatCurr(t.receivedAmount || 0)}`}>
+                            {formatCurr(receivedSoFar)}
+                          </td>
+                          <td className="p-2 text-right font-mono text-amber-400 font-bold">{formatCurr(balDue)}</td>
                         </tr>
                       );
                     })}
                   </tbody>
-                  {displayedTrips.length > 0 && (
+                  {filteredItemizedTrips.length > 0 && (
                     <tfoot className="bg-slate-950/90 font-bold border-t-2 border-slate-700 text-white sticky bottom-0">
                       <tr>
                         <td colSpan="3" className="p-2 text-amber-400 uppercase tracking-wider text-[10px] font-black">
-                          Total ({displayedTrips.length} Trips)
+                          Total ({filteredItemizedTrips.length} Trips)
                         </td>
                         <td className="p-2 text-right font-mono font-black text-white">{formatCurr(tripsTotalRent)}</td>
                         <td className="p-2 text-right font-mono font-black text-rose-400">{formatCurr(tripsTotalExp)}</td>
                         <td className={`p-2 text-right font-mono font-black ${tripsTotalProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {formatCurr(tripsTotalProfit)}
                         </td>
+                        <td className="p-2 text-right font-mono font-black text-emerald-400">{formatCurr(tripsTotalReceived)}</td>
                         <td className="p-2 text-right font-mono font-black text-amber-400">{formatCurr(tripsTotalPending)}</td>
                       </tr>
                     </tfoot>
@@ -1374,9 +1506,22 @@
                       <th className="p-2">Notes</th>
                       <th className="p-2 text-right">Amount</th>
                     </tr>
+                    <tr className="bg-slate-900/90 border-b border-slate-800">
+                      <th className="p-1"><ColFilterInput value={expColFilters.date} onChange={v => setExpColFilters({...expColFilters, date: v})} placeholder="Date..." /></th>
+                      <th className="p-1"><ColFilterInput value={expColFilters.category} onChange={v => setExpColFilters({...expColFilters, category: v})} placeholder="Category..." /></th>
+                      <th className="p-1"><ColFilterInput value={expColFilters.notes} onChange={v => setExpColFilters({...expColFilters, notes: v})} placeholder="Notes/Method..." /></th>
+                      <th className="p-1">
+                        <div className="flex items-center gap-1">
+                          <ColFilterInput value={expColFilters.amount} onChange={v => setExpColFilters({...expColFilters, amount: v})} placeholder="Amount..." className="text-right" />
+                          {hasExpFilters && (
+                            <button onClick={() => setExpColFilters({})} title="Clear filters" className="text-[9px] text-amber-400 hover:underline font-bold px-0.5">✕</button>
+                          )}
+                        </div>
+                      </th>
+                    </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
-                    {displayedExpenses.map(e => (
+                    {filteredItemizedExpenses.map(e => (
                       <tr key={e.id} className="hover:bg-slate-800/40">
                         <td className="p-2 font-mono text-slate-400">{e.date}</td>
                         <td className="p-2"><span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-200">{e.category}</span></td>
@@ -1385,11 +1530,11 @@
                       </tr>
                     ))}
                   </tbody>
-                  {displayedExpenses.length > 0 && (
+                  {filteredItemizedExpenses.length > 0 && (
                     <tfoot className="bg-slate-950/90 font-bold border-t-2 border-slate-700 text-white sticky bottom-0">
                       <tr>
                         <td colSpan="3" className="p-2 text-amber-400 uppercase tracking-wider text-[10px] font-black">
-                          Total ({displayedExpenses.length} Records)
+                          Total ({filteredItemizedExpenses.length} Records)
                         </td>
                         <td className="p-2 text-right font-mono font-black text-rose-400">{formatCurr(expensesTotalAmt)}</td>
                       </tr>
@@ -1420,18 +1565,20 @@
       const [comm, setComm] = useState(target.data.commissionAmount?.toString() || '0');
       const [isTds, setIsTds] = useState(target.data.isTdsDeducted ?? true);
       const [adv, setAdv] = useState(target.data.advanceReceived?.toString() || '0');
+      const [rec, setRec] = useState(target.data.receivedAmount?.toString() || '0');
       const [tripNotes, setTripNotes] = useState(target.data.notes || '');
 
       // Dynamic calculation helper for live Trip preview
       const modalGross = parseFloat(totalRent) || 0;
       const modalComm = parseFloat(comm) || 0;
       const modalAdv = parseFloat(adv) || 0;
+      const modalRec = parseFloat(rec) || 0;
       const modalTdsRate = (activeRules && activeRules.defaultTdsPercent) ? activeRules.defaultTdsPercent : 1;
       const modalDrvRate = (activeRules && activeRules.defaultDriverSalaryPercent) ? activeRules.defaultDriverSalaryPercent : 15;
       const modalTdsAmt = isTds ? (modalGross * (modalTdsRate / 100)) : 0;
       const modalNetRent = Math.max(0, modalGross - modalTdsAmt - modalComm);
       const modalDriverSalary = modalNetRent * (modalDrvRate / 100);
-      const modalBalDue = Math.max(0, modalGross - modalAdv - modalComm - modalTdsAmt);
+      const modalBalDue = Math.max(0, modalGross - modalAdv - modalRec - modalComm - modalTdsAmt);
 
       // EXPENSE STATE
       const [expDate, setExpDate] = useState(target.data.date || '');
@@ -1476,6 +1623,7 @@
             commissionAmount: modalComm,
             isTdsDeducted: isTds,
             advanceReceived: modalAdv,
+            receivedAmount: modalRec,
             tdsAmount: modalTdsAmt,
             netRent: modalNetRent,
             driverCommission: modalDriverSalary,
@@ -1569,7 +1717,7 @@
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div>
                       <label className="block text-xs font-semibold text-slate-300 mb-1">Gross Rent (₹)</label>
                       <input type="number" required min="1" value={totalRent} onChange={(e) => setTotalRent(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono font-bold" />
@@ -1581,6 +1729,10 @@
                     <div>
                       <label className="block text-xs font-semibold text-slate-300 mb-1">Advance (₹)</label>
                       <input type="number" min="0" value={adv} onChange={(e) => setAdv(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-emerald-300 mb-1">Received (₹)</label>
+                      <input type="number" min="0" value={rec} onChange={(e) => setRec(e.target.value)} className="w-full bg-slate-800 border border-emerald-500/40 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono" title="Amount received from company for this trip" />
                     </div>
                   </div>
 
@@ -1778,22 +1930,52 @@
       const [settleRef, setSettleRef] = useState('');
       const [deepDiveCmpId, setDeepDiveCmpId] = useState(null);
       const [editTarget, setEditTarget] = useState(null);
+      const [deepColFilters, setDeepColFilters] = useState({});
 
       const companyLedgers = companies.map(cmp => {
         const cTrips = filteredTrips.filter(t => t.companyName === cmp.name);
         const cSettles = filteredSettlements.filter(s => s.companyName === cmp.name);
         const contracted = cTrips.reduce((s, t) => s + Number(t.totalRent), 0);
         const advReceived = cTrips.reduce((s, t) => s + Number(t.advanceReceived), 0);
+        const tripReceived = cTrips.reduce((s, t) => s + Number(t.receivedAmount || 0), 0);
         const commTotal = cTrips.reduce((s, t) => s + Number(t.commissionAmount || 0), 0);
         const tdsTotal = cTrips.reduce((s, t) => s + Number(t.tdsAmount || 0), 0);
         const reimbTotal = cTrips.reduce((s, t) => s + (getTripReimbursable ? getTripReimbursable(t.id) : 0), 0);
         const settled = cSettles.reduce((s, st) => s + Number(st.amount), 0);
-        const totalReceived = advReceived + settled;
+        const totalReceived = advReceived + tripReceived + settled;
         const balanceDue = Math.max(0, contracted + reimbTotal - totalReceived - commTotal - tdsTotal);
-        return { cmp, contracted, advReceived, commTotal, tdsTotal, reimbTotal, settled, totalReceived, balanceDue, trips: cTrips, settlements: cSettles };
+        return { cmp, contracted, advReceived, tripReceived, commTotal, tdsTotal, reimbTotal, settled, totalReceived, balanceDue, trips: cTrips, settlements: cSettles };
       });
 
       const deepDiveCmp = deepDiveCmpId ? companyLedgers.find(cl => cl.cmp.id === deepDiveCmpId) : null;
+
+      const filteredDeepTrips = useMemo(() => {
+        if (!deepDiveCmp) return [];
+        return deepDiveCmp.trips.filter(t => {
+          const trkReg = getTruckReg ? getTruckReg(t.truckId) : t.truckId;
+          const trReimb = getTripReimbursable ? getTripReimbursable(t.id) : 0;
+          const trBal = getTripBalancePending ? getTripBalancePending(t) : t.balancePending;
+
+          if (deepColFilters.date && !String(t.date || '').toLowerCase().includes(deepColFilters.date.toLowerCase())) return false;
+          if (deepColFilters.truck && !String(trkReg || '').toLowerCase().includes(deepColFilters.truck.toLowerCase())) return false;
+          if (deepColFilters.route && !String(t.route || '').toLowerCase().includes(deepColFilters.route.toLowerCase())) return false;
+          if (deepColFilters.rent && !String(t.totalRent || '').includes(deepColFilters.rent)) return false;
+          if (deepColFilters.comm && !String(t.commissionAmount || 0).includes(deepColFilters.comm)) return false;
+          if (deepColFilters.tds && !String(t.tdsAmount || 0).includes(deepColFilters.tds)) return false;
+          if (deepColFilters.reimb && !String(trReimb).includes(deepColFilters.reimb)) return false;
+          if (deepColFilters.adv && !String(t.advanceReceived || 0).includes(deepColFilters.adv)) return false;
+          if (deepColFilters.bal && !String(trBal).includes(deepColFilters.bal)) return false;
+          return true;
+        });
+      }, [deepDiveCmp, deepColFilters, getTruckReg, getTripReimbursable, getTripBalancePending]);
+
+      const deepTotalContracted = filteredDeepTrips.reduce((s, t) => s + Number(t.totalRent || 0), 0);
+      const deepTotalComm = filteredDeepTrips.reduce((s, t) => s + Number(t.commissionAmount || 0), 0);
+      const deepTotalTds = filteredDeepTrips.reduce((s, t) => s + Number(t.tdsAmount || 0), 0);
+      const deepTotalReimb = filteredDeepTrips.reduce((s, t) => s + (getTripReimbursable ? getTripReimbursable(t.id) : 0), 0);
+      const deepTotalAdv = filteredDeepTrips.reduce((s, t) => s + Number(t.advanceReceived || 0), 0);
+      const deepTotalBal = filteredDeepTrips.reduce((s, t) => s + Number(getTripBalancePending ? getTripBalancePending(t) : t.balancePending || 0), 0);
+      const hasDeepFilters = Object.values(deepColFilters).some(Boolean);
 
       const handleSettleSubmit = (e) => {
         e.preventDefault();
@@ -1871,9 +2053,9 @@
                   {cl.balanceDue > 0 && (
                     <button
                       onClick={() => { setSettleModal(cl); setSettleAmt(cl.balanceDue); }}
-                      className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs"
+                      className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs shadow"
                     >
-                      Settle Due
+                      Receive Payment
                     </button>
                   )}
                 </div>
@@ -1890,7 +2072,7 @@
                     <h3 className="text-lg font-bold text-white">{deepDiveCmp.cmp.name} - Account Deep-Dive</h3>
                     <p className="text-xs text-slate-400">Contact: {deepDiveCmp.cmp.contactPerson || 'N/A'} • {deepDiveCmp.cmp.phone || 'N/A'}</p>
                   </div>
-                  <button onClick={() => setDeepDiveCmpId(null)} className="text-slate-400 hover:text-white text-lg">✕</button>
+                  <button onClick={() => { setDeepDiveCmpId(null); setDeepColFilters({}); }} className="text-slate-400 hover:text-white text-lg">✕</button>
                 </div>
                 <div className="py-4 overflow-y-auto flex-1">
                   <table className="w-full text-left text-xs text-slate-300">
@@ -1907,9 +2089,25 @@
                         <th className="p-2 text-right">Balance Due</th>
                         <th className="p-2 text-center">Action</th>
                       </tr>
+                      <tr className="bg-slate-900/90 border-b border-slate-800">
+                        <th className="p-1"><ColFilterInput value={deepColFilters.date} onChange={v => setDeepColFilters({...deepColFilters, date: v})} placeholder="Date..." /></th>
+                        <th className="p-1"><ColFilterInput value={deepColFilters.truck} onChange={v => setDeepColFilters({...deepColFilters, truck: v})} placeholder="Truck..." /></th>
+                        <th className="p-1"><ColFilterInput value={deepColFilters.route} onChange={v => setDeepColFilters({...deepColFilters, route: v})} placeholder="Route..." /></th>
+                        <th className="p-1"><ColFilterInput value={deepColFilters.rent} onChange={v => setDeepColFilters({...deepColFilters, rent: v})} placeholder="Rent..." className="text-right" /></th>
+                        <th className="p-1"><ColFilterInput value={deepColFilters.comm} onChange={v => setDeepColFilters({...deepColFilters, comm: v})} placeholder="Comm..." className="text-right" /></th>
+                        <th className="p-1"><ColFilterInput value={deepColFilters.tds} onChange={v => setDeepColFilters({...deepColFilters, tds: v})} placeholder="TDS..." className="text-right" /></th>
+                        <th className="p-1"><ColFilterInput value={deepColFilters.reimb} onChange={v => setDeepColFilters({...deepColFilters, reimb: v})} placeholder="Reimb..." className="text-right" /></th>
+                        <th className="p-1"><ColFilterInput value={deepColFilters.adv} onChange={v => setDeepColFilters({...deepColFilters, adv: v})} placeholder="Advance..." className="text-right" /></th>
+                        <th className="p-1"><ColFilterInput value={deepColFilters.bal} onChange={v => setDeepColFilters({...deepColFilters, bal: v})} placeholder="Due..." className="text-right" /></th>
+                        <th className="p-1 text-center">
+                          {hasDeepFilters && (
+                            <button onClick={() => setDeepColFilters({})} className="text-[10px] text-amber-400 hover:underline font-bold">✕ Clear</button>
+                          )}
+                        </th>
+                      </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800">
-                      {deepDiveCmp.trips.map(t => {
+                      {filteredDeepTrips.map(t => {
                         const trReimb = getTripReimbursable ? getTripReimbursable(t.id) : 0;
                         const trBal = getTripBalancePending ? getTripBalancePending(t) : t.balancePending;
                         return (
@@ -1941,25 +2139,25 @@
                     <tfoot className="bg-slate-950 font-bold border-t-2 border-slate-700 text-white">
                       <tr>
                         <td colSpan={3} className="p-2.5 uppercase tracking-wider text-amber-400 font-extrabold text-[11px]">
-                          Total ({deepDiveCmp.trips.length} Trips)
+                          Total ({filteredDeepTrips.length} Trips)
                         </td>
                         <td className="p-2.5 text-right font-mono text-white">
-                          {formatCurr(deepDiveCmp.contracted)}
+                          {formatCurr(deepTotalContracted)}
                         </td>
                         <td className="p-2.5 text-right font-mono text-rose-400">
-                          -{formatCurr(deepDiveCmp.commTotal)}
+                          -{formatCurr(deepTotalComm)}
                         </td>
                         <td className="p-2.5 text-right font-mono text-blue-400">
-                          -{formatCurr(deepDiveCmp.tdsTotal)}
+                          -{formatCurr(deepTotalTds)}
                         </td>
                         <td className="p-2.5 text-right font-mono text-amber-300">
-                          +{formatCurr(deepDiveCmp.reimbTotal)}
+                          +{formatCurr(deepTotalReimb)}
                         </td>
                         <td className="p-2.5 text-right font-mono text-emerald-400">
-                          -{formatCurr(deepDiveCmp.advReceived)}
+                          -{formatCurr(deepTotalAdv)}
                         </td>
                         <td className="p-2.5 text-right font-mono text-amber-400 font-extrabold">
-                          {formatCurr(deepDiveCmp.balanceDue)}
+                          {formatCurr(deepTotalBal)}
                         </td>
                         <td className="p-2.5"></td>
                       </tr>
@@ -1967,21 +2165,21 @@
                   </table>
                 </div>
                 <div className="pt-3 border-t border-slate-800 flex justify-end">
-                  <button onClick={() => setDeepDiveCmpId(null)} className="px-4 py-2 bg-slate-800 text-white rounded-lg text-xs font-semibold">Done</button>
+                  <button onClick={() => { setDeepDiveCmpId(null); setDeepColFilters({}); }} className="px-4 py-2 bg-slate-800 text-white rounded-lg text-xs font-semibold">Done</button>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Settle Modal */}
+          {/* Receive Payment Modal */}
           {settleModal && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
               <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl p-6">
-                <h3 className="text-base font-bold text-white mb-1">Record Client Settlement</h3>
-                <p className="text-xs text-amber-400 mb-4">{settleModal.cmp.name} (Due: {formatCurr(settleModal.balanceDue)})</p>
+                <h3 className="text-base font-bold text-white mb-1">Record Payment Received from Client</h3>
+                <p className="text-xs text-amber-400 mb-4">{settleModal.cmp.name} (Outstanding Due: {formatCurr(settleModal.balanceDue)})</p>
                 <form onSubmit={handleSettleSubmit} className="space-y-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-300 mb-1">Amount (₹)</label>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Amount Received (₹) *</label>
                     <input type="number" required min="1" value={settleAmt} onChange={(e) => setSettleAmt(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-mono" />
                   </div>
                   <div>
@@ -1999,7 +2197,7 @@
                   </div>
                   <div className="flex justify-end gap-2 pt-2">
                     <button type="button" onClick={() => setSettleModal(null)} className="px-4 py-2 text-xs text-slate-400 hover:text-white">Cancel</button>
-                    <button type="submit" className="px-4 py-2 bg-amber-500 text-slate-950 font-bold text-xs rounded-lg shadow-md">Confirm</button>
+                    <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow-md">Record Receipt</button>
                   </div>
                 </form>
               </div>
@@ -2021,6 +2219,7 @@
       const [pDesc, setPDesc] = useState('');
       const [deepDiveDrvId, setDeepDiveDrvId] = useState(null);
       const [editTarget, setEditTarget] = useState(null);
+      const [drvColFilters, setDrvColFilters] = useState({});
 
       const driverLedgers = drivers.map(drv => {
         const dTrips = filteredTrips.filter(t => t.driverName === drv.name);
@@ -2033,6 +2232,52 @@
       });
 
       const deepDiveDrv = deepDiveDrvId ? driverLedgers.find(dl => dl.drv.id === deepDiveDrvId) : null;
+
+      const combinedDrvRows = useMemo(() => {
+        if (!deepDiveDrv) return [];
+        const rows = [];
+        deepDiveDrv.trips.forEach(t => {
+          rows.push({
+            id: t.id,
+            date: t.date,
+            type: '15% Trip Salary',
+            details: `${t.route} (Net: ${formatCurr(t.netRent)})`,
+            earned: Number(t.driverCommission || 0),
+            paidOut: 0,
+            rawType: 'TRIP',
+            rawObj: t,
+          });
+        });
+        deepDiveDrv.payments.forEach(p => {
+          rows.push({
+            id: p.id,
+            date: p.date,
+            type: p.type === 'SALARY_PAYOUT' ? 'Advance' : 'Expense Claim',
+            details: `${p.description} (${p.paymentMethod || 'Cash'})`,
+            earned: p.type === 'DRIVER_EXPENSE' ? Number(p.amount || 0) : 0,
+            paidOut: p.type === 'SALARY_PAYOUT' ? Number(p.amount || 0) : 0,
+            rawType: 'DRIVER_PAY',
+            rawObj: p,
+          });
+        });
+        return rows.sort((a, b) => b.date.localeCompare(a.date));
+      }, [deepDiveDrv]);
+
+      const filteredDrvRows = useMemo(() => {
+        return combinedDrvRows.filter(r => {
+          if (drvColFilters.date && !String(r.date || '').toLowerCase().includes(drvColFilters.date.toLowerCase())) return false;
+          if (drvColFilters.type && !String(r.type || '').toLowerCase().includes(drvColFilters.type.toLowerCase())) return false;
+          if (drvColFilters.details && !String(r.details || '').toLowerCase().includes(drvColFilters.details.toLowerCase())) return false;
+          if (drvColFilters.earned && !String(r.earned || '').includes(drvColFilters.earned)) return false;
+          if (drvColFilters.paidOut && !String(r.paidOut || '').includes(drvColFilters.paidOut)) return false;
+          return true;
+        });
+      }, [combinedDrvRows, drvColFilters]);
+
+      const drvTotalEarned = filteredDrvRows.reduce((s, r) => s + r.earned, 0);
+      const drvTotalPaidOut = filteredDrvRows.reduce((s, r) => s + r.paidOut, 0);
+      const drvNetDue = drvTotalEarned - drvTotalPaidOut;
+      const hasDrvFilters = Object.values(drvColFilters).some(Boolean);
 
       const handlePaymentSubmit = (e) => {
         e.preventDefault();
@@ -2119,7 +2364,7 @@
                     <h3 className="text-lg font-bold text-white">{deepDiveDrv.drv.name} - Driver Deep-Dive</h3>
                     <p className="text-xs text-slate-400">Phone: {deepDiveDrv.drv.phone} • License: {deepDiveDrv.drv.licenseNumber}</p>
                   </div>
-                  <button onClick={() => setDeepDiveDrvId(null)} className="text-slate-400 hover:text-white text-lg">✕</button>
+                  <button onClick={() => { setDeepDiveDrvId(null); setDrvColFilters({}); }} className="text-slate-400 hover:text-white text-lg">✕</button>
                 </div>
                 <div className="py-4 overflow-y-auto flex-1 space-y-4">
                   <table className="w-full text-left text-xs text-slate-300">
@@ -2132,46 +2377,44 @@
                         <th className="p-2 text-right">Paid Out</th>
                         <th className="p-2 text-center">Action</th>
                       </tr>
+                      <tr className="bg-slate-900/90 border-b border-slate-800">
+                        <th className="p-1"><ColFilterInput value={drvColFilters.date} onChange={v => setDrvColFilters({...drvColFilters, date: v})} placeholder="Date..." /></th>
+                        <th className="p-1"><ColFilterInput value={drvColFilters.type} onChange={v => setDrvColFilters({...drvColFilters, type: v})} placeholder="Type..." /></th>
+                        <th className="p-1"><ColFilterInput value={drvColFilters.details} onChange={v => setDrvColFilters({...drvColFilters, details: v})} placeholder="Details..." /></th>
+                        <th className="p-1"><ColFilterInput value={drvColFilters.earned} onChange={v => setDrvColFilters({...drvColFilters, earned: v})} placeholder="Earned..." className="text-right" /></th>
+                        <th className="p-1"><ColFilterInput value={drvColFilters.paidOut} onChange={v => setDrvColFilters({...drvColFilters, paidOut: v})} placeholder="Paid..." className="text-right" /></th>
+                        <th className="p-1 text-center">
+                          {hasDrvFilters && (
+                            <button onClick={() => setDrvColFilters({})} className="text-[10px] text-amber-400 hover:underline font-bold">✕ Clear</button>
+                          )}
+                        </th>
+                      </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800">
-                      {deepDiveDrv.trips.map(t => (
-                        <tr key={t.id} className="hover:bg-slate-800/40">
-                          <td className="p-2 font-mono text-slate-400">{t.date}</td>
-                          <td className="p-2 text-purple-300 font-bold">15% Trip Salary</td>
-                          <td className="p-2">{t.route} (Net: {formatCurr(t.netRent)})</td>
-                          <td className="p-2 text-right font-mono text-purple-300 font-bold">+{formatCurr(t.driverCommission)}</td>
-                          <td className="p-2 text-right font-mono text-slate-500">-</td>
-                          <td className="p-2 text-center whitespace-nowrap">
-                            <div className="flex items-center justify-center gap-2">
-                              <button onClick={() => setEditTarget({ type: 'TRIP', data: t })} className="text-amber-400 hover:underline">
-                                Edit
-                              </button>
-                              <button onClick={() => { if (confirm('Delete trip? Dependent salary will recalculate.')) deleteTrip(t.id); }} className="text-rose-400 hover:underline">
-                                Delete
-                              </button>
-                            </div>
+                      {filteredDrvRows.map(r => (
+                        <tr key={`${r.rawType}-${r.id}`} className="hover:bg-slate-800/40">
+                          <td className="p-2 font-mono text-slate-400 whitespace-nowrap">{r.date}</td>
+                          <td className={`p-2 font-bold whitespace-nowrap ${r.rawType === 'TRIP' ? 'text-purple-300' : (r.type === 'Advance' ? 'text-rose-400' : 'text-blue-300')}`}>
+                            {r.type}
                           </td>
-                        </tr>
-                      ))}
-                      {deepDiveDrv.payments.map(p => (
-                        <tr key={p.id} className="hover:bg-slate-800/40">
-                          <td className="p-2 font-mono text-slate-400">{p.date}</td>
-                          <td className={`p-2 font-bold ${p.type === 'SALARY_PAYOUT' ? 'text-rose-400' : 'text-blue-300'}`}>
-                            {p.type === 'SALARY_PAYOUT' ? 'Advance' : 'Expense Claim'}
+                          <td className="p-2 text-slate-300">{r.details}</td>
+                          <td className="p-2 text-right font-mono text-purple-300 font-bold whitespace-nowrap">
+                            {r.earned > 0 ? `+${formatCurr(r.earned)}` : '-'}
                           </td>
-                          <td className="p-2">{p.description} ({p.paymentMethod || 'Cash'})</td>
-                          <td className="p-2 text-right font-mono text-blue-300 font-bold">
-                            {p.type === 'DRIVER_EXPENSE' ? `+${formatCurr(p.amount)}` : '-'}
-                          </td>
-                          <td className="p-2 text-right font-mono text-rose-400 font-bold">
-                            {p.type === 'SALARY_PAYOUT' ? `-${formatCurr(p.amount)}` : '-'}
+                          <td className="p-2 text-right font-mono text-rose-400 font-bold whitespace-nowrap">
+                            {r.paidOut > 0 ? `-${formatCurr(r.paidOut)}` : '-'}
                           </td>
                           <td className="p-2 text-center whitespace-nowrap">
                             <div className="flex items-center justify-center gap-2">
-                              <button onClick={() => setEditTarget({ type: 'DRIVER_PAY', data: p })} className="text-amber-400 hover:underline">
+                              <button onClick={() => setEditTarget({ type: r.rawType, data: r.rawObj })} className="text-amber-400 hover:underline">
                                 Edit
                               </button>
-                              <button onClick={() => { if (confirm('Delete payment? Driver balance will recalculate.')) deleteDriverPayment(p.id); }} className="text-rose-400 hover:underline">
+                              <button onClick={() => {
+                                if (confirm(`Delete ${r.type}? Driver balances will recalculate.`)) {
+                                  if (r.rawType === 'TRIP') deleteTrip(r.id);
+                                  else deleteDriverPayment(r.id);
+                                }
+                              }} className="text-rose-400 hover:underline">
                                 Delete
                               </button>
                             </div>
@@ -2183,28 +2426,23 @@
                     <tfoot className="bg-slate-950 font-bold border-t-2 border-slate-700 text-white">
                       <tr>
                         <td colSpan={3} className="p-2.5 uppercase tracking-wider text-purple-400 font-extrabold text-[11px]">
-                          Total ({deepDiveDrv.trips.length} Trips, {deepDiveDrv.payments.length} Payments/Claims)
+                          Total ({filteredDrvRows.length} Records)
                         </td>
                         <td className="p-2.5 text-right font-mono text-purple-300 font-extrabold">
-                          +{formatCurr(
-                            deepDiveDrv.trips.reduce((s, t) => s + Number(t.driverCommission || 0), 0) +
-                            deepDiveDrv.payments.filter(p => p.type === 'DRIVER_EXPENSE').reduce((s, p) => s + Number(p.amount || 0), 0)
-                          )}
+                          +{formatCurr(drvTotalEarned)}
                         </td>
                         <td className="p-2.5 text-right font-mono text-rose-400 font-extrabold">
-                          -{formatCurr(
-                            deepDiveDrv.payments.filter(p => p.type === 'SALARY_PAYOUT').reduce((s, p) => s + Number(p.amount || 0), 0)
-                          )}
+                          -{formatCurr(drvTotalPaidOut)}
                         </td>
                         <td className="p-2.5 text-center font-mono font-extrabold text-amber-400 text-[11px] whitespace-nowrap">
-                          Net: {formatCurr(deepDiveDrv.balance)}
+                          Net: {formatCurr(drvNetDue)}
                         </td>
                       </tr>
                     </tfoot>
                   </table>
                 </div>
                 <div className="pt-3 border-t border-slate-800 flex justify-end">
-                  <button onClick={() => setDeepDiveDrvId(null)} className="px-4 py-2 bg-slate-800 text-white rounded-lg text-xs font-semibold">Done</button>
+                  <button onClick={() => { setDeepDiveDrvId(null); setDrvColFilters({}); }} className="px-4 py-2 bg-slate-800 text-white rounded-lg text-xs font-semibold">Done</button>
                 </div>
               </div>
             </div>
@@ -2269,8 +2507,30 @@
     // --- TAB 5: TDS DEDUCTION LEDGER (NEW) ---
     function TdsLedgerTab() {
       const { filteredTrips, trucks, summaryMetrics, deleteTrip } = useFleet();
+      const [tdsColFilters, setTdsColFilters] = useState({});
+
       const tdsTrips = filteredTrips.filter(t => t.isTdsDeducted && Number(t.tdsAmount) > 0);
       const totalGrossSubjectToTds = tdsTrips.reduce((s, t) => s + Number(t.totalRent), 0);
+
+      const filteredTdsTrips = useMemo(() => {
+        return tdsTrips.filter(t => {
+          const trk = trucks.find(x => x.id === t.truckId);
+          const trkReg = trk ? trk.registrationNumber : t.truckId;
+          if (tdsColFilters.date && !String(t.date || '').toLowerCase().includes(tdsColFilters.date.toLowerCase())) return false;
+          if (tdsColFilters.truck && !String(trkReg || '').toLowerCase().includes(tdsColFilters.truck.toLowerCase())) return false;
+          if (tdsColFilters.company && !String(t.companyName || '').toLowerCase().includes(tdsColFilters.company.toLowerCase())) return false;
+          if (tdsColFilters.rent && !String(t.totalRent || '').includes(tdsColFilters.rent)) return false;
+          if (tdsColFilters.tds && !String(t.tdsAmount || '').includes(tdsColFilters.tds)) return false;
+          if (tdsColFilters.net && !String(t.netRent || '').includes(tdsColFilters.net)) return false;
+          if (tdsColFilters.tripId && !String(t.id || '').toLowerCase().includes(tdsColFilters.tripId.toLowerCase())) return false;
+          return true;
+        });
+      }, [tdsTrips, tdsColFilters, trucks]);
+
+      const tdsGrossTotal = filteredTdsTrips.reduce((s, t) => s + Number(t.totalRent || 0), 0);
+      const tdsAmountTotal = filteredTdsTrips.reduce((s, t) => s + Number(t.tdsAmount || 0), 0);
+      const tdsNetTotal = filteredTdsTrips.reduce((s, t) => s + Number(t.netRent || 0), 0);
+      const hasTdsFilters = Object.values(tdsColFilters).some(Boolean);
 
       return (
         <div className="space-y-6">
@@ -2314,12 +2574,28 @@
                   <th className="py-2.5 px-3 text-right">Net Rent</th>
                   <th className="py-2.5 px-3 text-center">Trip ID</th>
                 </tr>
+                <tr className="bg-slate-900/90 border-b border-slate-800">
+                  <th className="p-1"><ColFilterInput value={tdsColFilters.date} onChange={v => setTdsColFilters({...tdsColFilters, date: v})} placeholder="Date..." /></th>
+                  <th className="p-1"><ColFilterInput value={tdsColFilters.truck} onChange={v => setTdsColFilters({...tdsColFilters, truck: v})} placeholder="Truck..." /></th>
+                  <th className="p-1"><ColFilterInput value={tdsColFilters.company} onChange={v => setTdsColFilters({...tdsColFilters, company: v})} placeholder="Company..." /></th>
+                  <th className="p-1"><ColFilterInput value={tdsColFilters.rent} onChange={v => setTdsColFilters({...tdsColFilters, rent: v})} placeholder="Rent..." className="text-right" /></th>
+                  <th className="p-1"><ColFilterInput value={tdsColFilters.tds} onChange={v => setTdsColFilters({...tdsColFilters, tds: v})} placeholder="TDS..." className="text-right" /></th>
+                  <th className="p-1"><ColFilterInput value={tdsColFilters.net} onChange={v => setTdsColFilters({...tdsColFilters, net: v})} placeholder="Net..." className="text-right" /></th>
+                  <th className="p-1">
+                    <div className="flex items-center gap-1">
+                      <ColFilterInput value={tdsColFilters.tripId} onChange={v => setTdsColFilters({...tdsColFilters, tripId: v})} placeholder="ID..." className="text-center" />
+                      {hasTdsFilters && (
+                        <button onClick={() => setTdsColFilters({})} title="Clear filters" className="text-[9px] text-amber-400 hover:underline font-bold px-0.5">✕</button>
+                      )}
+                    </div>
+                  </th>
+                </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
-                {tdsTrips.length === 0 ? (
-                  <tr><td colSpan={7} className="py-6 text-center text-slate-500">No TDS deducted trips in this period.</td></tr>
+                {filteredTdsTrips.length === 0 ? (
+                  <tr><td colSpan={7} className="py-6 text-center text-slate-500">No matching TDS records found.</td></tr>
                 ) : (
-                  tdsTrips.map(t => {
+                  filteredTdsTrips.map(t => {
                     const trk = trucks.find(x => x.id === t.truckId);
                     return (
                       <tr key={t.id} className="hover:bg-slate-800/40">
@@ -2335,6 +2611,19 @@
                   })
                 )}
               </tbody>
+              {filteredTdsTrips.length > 0 && (
+                <tfoot className="bg-slate-950/90 font-bold border-t-2 border-slate-700 text-white">
+                  <tr>
+                    <td colSpan={3} className="py-3 px-3 text-amber-400 uppercase tracking-wider text-[11px] font-black">
+                      Total ({filteredTdsTrips.length} Records)
+                    </td>
+                    <td className="py-3 px-3 text-right font-mono font-black text-white">{formatCurr(tdsGrossTotal)}</td>
+                    <td className="py-3 px-3 text-right font-mono font-black text-emerald-400">{formatCurr(tdsAmountTotal)}</td>
+                    <td className="py-3 px-3 text-right font-mono font-black text-blue-300">{formatCurr(tdsNetTotal)}</td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
         </div>
@@ -2351,6 +2640,7 @@
       const [typeFilter, setTypeFilter] = useState('ALL');
       const [searchTerm, setSearchTerm] = useState('');
       const [editTarget, setEditTarget] = useState(null);
+      const [colFilters, setColFilters] = useState({});
 
       const unified = useMemo(() => {
         const list = [];
@@ -2397,6 +2687,21 @@
         }
         return true;
       });
+
+      const displayedItems = useMemo(() => {
+        return filtered.filter(item => {
+          if (colFilters.date && !String(item.date || '').toLowerCase().includes(colFilters.date.toLowerCase())) return false;
+          if (colFilters.type && !String(item.type || '').toLowerCase().includes(colFilters.type.toLowerCase())) return false;
+          if (colFilters.entity && !String(item.entity || '').toLowerCase().includes(colFilters.entity.toLowerCase())) return false;
+          if (colFilters.title && !String(item.title || '').toLowerCase().includes(colFilters.title.toLowerCase())) return false;
+          if (colFilters.details && !String(item.details || '').toLowerCase().includes(colFilters.details.toLowerCase())) return false;
+          if (colFilters.amount && !String(item.amount || '').includes(colFilters.amount)) return false;
+          return true;
+        });
+      }, [filtered, colFilters]);
+
+      const univTotalAmount = displayedItems.reduce((s, item) => s + Number(item.amount || 0), 0);
+      const hasUnivColFilters = Object.values(colFilters).some(Boolean);
 
       const handleDelete = (item) => {
         if (!confirm(`Delete this ${item.type} record permanently? All ledgers will re-calculate.`)) return;
@@ -2445,31 +2750,59 @@
                   <th className="py-2.5 px-3 text-right">Amount</th>
                   <th className="py-2.5 px-3 text-center">Action</th>
                 </tr>
+                <tr className="bg-slate-900/90 border-b border-slate-800">
+                  <th className="p-1"><ColFilterInput value={colFilters.date} onChange={v => setColFilters({...colFilters, date: v})} placeholder="Date..." /></th>
+                  <th className="p-1"><ColFilterInput value={colFilters.type} onChange={v => setColFilters({...colFilters, type: v})} placeholder="Type..." /></th>
+                  <th className="p-1"><ColFilterInput value={colFilters.entity} onChange={v => setColFilters({...colFilters, entity: v})} placeholder="Entity..." /></th>
+                  <th className="p-1"><ColFilterInput value={colFilters.title} onChange={v => setColFilters({...colFilters, title: v})} placeholder="Description..." /></th>
+                  <th className="p-1"><ColFilterInput value={colFilters.details} onChange={v => setColFilters({...colFilters, details: v})} placeholder="Details..." /></th>
+                  <th className="p-1"><ColFilterInput value={colFilters.amount} onChange={v => setColFilters({...colFilters, amount: v})} placeholder="Amount..." className="text-right" /></th>
+                  <th className="p-1 text-center">
+                    {hasUnivColFilters && (
+                      <button onClick={() => setColFilters({})} className="text-[10px] text-amber-400 hover:underline font-bold">✕ Clear</button>
+                    )}
+                  </th>
+                </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
-                {filtered.map(item => (
-                  <tr key={`${item.type}-${item.id}`} className="hover:bg-slate-800/40">
-                    <td className="py-3 px-3 font-mono text-slate-400 whitespace-nowrap">{item.date}</td>
-                    <td className="py-3 px-3">
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300">{item.type}</span>
-                    </td>
-                    <td className="py-3 px-3 font-semibold text-white">{item.entity}</td>
-                    <td className="py-3 px-3 text-slate-200">{item.title}</td>
-                    <td className="py-3 px-3 text-slate-400 text-[11px]">{item.details}</td>
-                    <td className="py-3 px-3 text-right font-mono font-bold text-white">{formatCurr(item.amount)}</td>
-                    <td className="py-3 px-3 text-center whitespace-nowrap">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <button onClick={() => setEditTarget({ type: item.type, data: item.rawObj })} className="p-1 px-2.5 rounded bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 text-[11px] font-bold">
-                          Edit
-                        </button>
-                        <button onClick={() => handleDelete(item)} className="p-1 px-2.5 rounded bg-rose-900/40 hover:bg-rose-600 text-rose-300 hover:text-white text-[11px] font-bold">
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {displayedItems.length === 0 ? (
+                  <tr><td colSpan={7} className="py-8 text-center text-slate-500">No records match the active filters.</td></tr>
+                ) : (
+                  displayedItems.map(item => (
+                    <tr key={`${item.type}-${item.id}`} className="hover:bg-slate-800/40">
+                      <td className="py-3 px-3 font-mono text-slate-400 whitespace-nowrap">{item.date}</td>
+                      <td className="py-3 px-3">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300">{item.type}</span>
+                      </td>
+                      <td className="py-3 px-3 font-semibold text-white">{item.entity}</td>
+                      <td className="py-3 px-3 text-slate-200">{item.title}</td>
+                      <td className="py-3 px-3 text-slate-400 text-[11px]">{item.details}</td>
+                      <td className="py-3 px-3 text-right font-mono font-bold text-white">{formatCurr(item.amount)}</td>
+                      <td className="py-3 px-3 text-center whitespace-nowrap">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button onClick={() => setEditTarget({ type: item.type, data: item.rawObj })} className="p-1 px-2.5 rounded bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 text-[11px] font-bold">
+                            Edit
+                          </button>
+                          <button onClick={() => handleDelete(item)} className="p-1 px-2.5 rounded bg-rose-900/40 hover:bg-rose-600 text-rose-300 hover:text-white text-[11px] font-bold">
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
+              {displayedItems.length > 0 && (
+                <tfoot className="bg-slate-950/90 font-bold border-t-2 border-slate-700 text-white">
+                  <tr>
+                    <td colSpan={5} className="py-3 px-3 text-amber-400 uppercase tracking-wider text-[11px] font-black">
+                      Total ({displayedItems.length} Records)
+                    </td>
+                    <td className="py-3 px-3 text-right font-mono font-black text-white">{formatCurr(univTotalAmount)}</td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
 
@@ -2498,6 +2831,7 @@
       const [tComm, setTComm] = useState('0');
       const [isTds, setIsTds] = useState(true);
       const [tAdv, setTAdv] = useState('');
+      const [tRec, setTRec] = useState('');
       const [tNotes, setTNotes] = useState('');
 
       const handleAddDrop = () => setDrops([...drops, '']);
@@ -2507,12 +2841,13 @@
       const grossNum = parseFloat(tRent) || 0;
       const commNum = parseFloat(tComm) || 0;
       const advNum = parseFloat(tAdv) || 0;
+      const recNum = parseFloat(tRec) || 0;
       const defaultTdsRate = (activeRules && activeRules.defaultTdsPercent !== undefined) ? activeRules.defaultTdsPercent : 1;
       const defaultDrvRate = (activeRules && activeRules.defaultDriverSalaryPercent !== undefined) ? activeRules.defaultDriverSalaryPercent : 15;
       const tdsAmt = isTds ? (grossNum * (defaultTdsRate / 100)) : 0;
       const netRent = Math.max(0, grossNum - tdsAmt - commNum);
       const driver15 = netRent * (defaultDrvRate / 100);
-      const balancePending = Math.max(0, grossNum - advNum - commNum - tdsAmt);
+      const balancePending = Math.max(0, grossNum - advNum - recNum - commNum - tdsAmt);
 
       const handleTripSubmit = (e) => {
         e.preventDefault();
@@ -2524,11 +2859,11 @@
         addTrip({
           date: tDate, truckId: tTruck, companyName: tComp, driverName: tDriver,
           fromLocation: fromLoc, toLocation: toLoc, additionalDrops: drops.filter(Boolean),
-          totalRent: grossNum, commissionAmount: commNum, isTdsDeducted: isTds, advanceReceived: advNum, notes: tNotes
+          totalRent: grossNum, commissionAmount: commNum, isTdsDeducted: isTds, advanceReceived: advNum, receivedAmount: recNum, notes: tNotes
         });
 
         notify(`Trip saved! Net Rent: ${formatCurr(netRent)}, 15% Driver Salary: ${formatCurr(driver15)}, Company Balance Due: ${formatCurr(balancePending)}`);
-        setTRent(''); setTComm('0'); setTAdv(''); setFromLoc(''); setToLoc(''); setDrops([]); setTNotes('');
+        setTRent(''); setTComm('0'); setTAdv(''); setTRec(''); setFromLoc(''); setToLoc(''); setDrops([]); setTNotes('');
       };
 
       // Expense
@@ -2660,7 +2995,7 @@
                 ))}
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Agreed Gross Rent (₹) *</label>
                   <input type="number" required min="1" placeholder="50000" value={tRent} onChange={(e) => setTRent(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono font-bold" />
@@ -2672,6 +3007,10 @@
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Advance Received (₹)</label>
                   <input type="number" min="0" placeholder="20000" value={tAdv} onChange={(e) => setTAdv(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-emerald-300 mb-1">Amount Received from Company (₹)</label>
+                  <input type="number" min="0" placeholder="0" value={tRec} onChange={(e) => setTRec(e.target.value)} className="w-full bg-slate-800 border border-emerald-500/40 focus:border-emerald-400 rounded-xl px-3 py-2 text-sm text-white font-mono" title="Subsequent payments received from company for this trip" />
                 </div>
               </div>
 
@@ -2693,7 +3032,7 @@
                   <div className="text-base font-bold font-mono text-purple-300 mt-0.5">{formatCurr(driver15)}</div>
                 </div>
                 <div className="bg-amber-500/10 border border-amber-500/20 p-2.5 rounded-lg">
-                  <span className="text-[10px] uppercase font-bold text-amber-300">Company Due (Gross - Adv - Comm - TDS)</span>
+                  <span className="text-[10px] uppercase font-bold text-amber-300">Company Due (Gross - Adv - Recvd - Comm - TDS)</span>
                   <div className="text-base font-bold font-mono text-amber-400 mt-0.5">{formatCurr(balancePending)}</div>
                 </div>
                 <div className="bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-lg">
@@ -3156,24 +3495,44 @@
         setTimeout(() => setRulesSaved(false), 3000);
       };
 
+      // Column filter states for Master Tables
+      const [truckColFilters, setTruckColFilters] = useState({});
+      const [compColFilters, setCompColFilters] = useState({});
+      const [drvColFilters, setDrvColFilters] = useState({});
+
       // Filtered views
       const q = searchQuery.toLowerCase();
       const filteredTrucks = trucks.filter(t => (
-        t.registrationNumber.toLowerCase().includes(q) ||
-        (t.model && t.model.toLowerCase().includes(q)) ||
-        (t.notes && t.notes.toLowerCase().includes(q))
+        (!q || t.registrationNumber.toLowerCase().includes(q) || (t.model && t.model.toLowerCase().includes(q)) || (t.notes && t.notes.toLowerCase().includes(q))) &&
+        (!truckColFilters.reg || t.registrationNumber.toLowerCase().includes(truckColFilters.reg.toLowerCase())) &&
+        (!truckColFilters.model || (t.model && t.model.toLowerCase().includes(truckColFilters.model.toLowerCase()))) &&
+        (!truckColFilters.capacity || (t.capacity && t.capacity.toLowerCase().includes(truckColFilters.capacity.toLowerCase()))) &&
+        (!truckColFilters.date || (t.registrationDate && t.registrationDate.toLowerCase().includes(truckColFilters.date.toLowerCase()))) &&
+        (!truckColFilters.notes || (t.notes && t.notes.toLowerCase().includes(truckColFilters.notes.toLowerCase()))) &&
+        (!truckColFilters.status || (t.status && t.status.toLowerCase().includes(truckColFilters.status.toLowerCase())))
       ));
+
       const filteredCompanies = companies.filter(c => (
-        c.name.toLowerCase().includes(q) ||
-        (c.contactPerson && c.contactPerson.toLowerCase().includes(q)) ||
-        (c.phone && c.phone.toLowerCase().includes(q)) ||
-        (c.gstin && c.gstin.toLowerCase().includes(q))
+        (!q || c.name.toLowerCase().includes(q) || (c.contactPerson && c.contactPerson.toLowerCase().includes(q)) || (c.phone && c.phone.toLowerCase().includes(q)) || (c.gstin && c.gstin.toLowerCase().includes(q))) &&
+        (!compColFilters.name || c.name.toLowerCase().includes(compColFilters.name.toLowerCase())) &&
+        (!compColFilters.contact || (c.contactPerson && c.contactPerson.toLowerCase().includes(compColFilters.contact.toLowerCase()))) &&
+        (!compColFilters.phone || (c.phone && c.phone.toLowerCase().includes(compColFilters.phone.toLowerCase()))) &&
+        (!compColFilters.email || (c.email && c.email.toLowerCase().includes(compColFilters.email.toLowerCase()))) &&
+        (!compColFilters.gstin || (c.gstin && c.gstin.toLowerCase().includes(compColFilters.gstin.toLowerCase())))
       ));
+
       const filteredDrivers = drivers.filter(d => (
-        d.name.toLowerCase().includes(q) ||
-        (d.phone && d.phone.toLowerCase().includes(q)) ||
-        (d.licenseNumber && d.licenseNumber.toLowerCase().includes(q))
+        (!q || d.name.toLowerCase().includes(q) || (d.phone && d.phone.toLowerCase().includes(q)) || (d.licenseNumber && d.licenseNumber.toLowerCase().includes(q))) &&
+        (!drvColFilters.name || d.name.toLowerCase().includes(drvColFilters.name.toLowerCase())) &&
+        (!drvColFilters.phone || (d.phone && d.phone.toLowerCase().includes(drvColFilters.phone.toLowerCase()))) &&
+        (!drvColFilters.license || (d.licenseNumber && d.licenseNumber.toLowerCase().includes(drvColFilters.license.toLowerCase()))) &&
+        (!drvColFilters.joining || (d.joiningDate && d.joiningDate.toLowerCase().includes(drvColFilters.joining.toLowerCase()))) &&
+        (!drvColFilters.status || (d.status && d.status.toLowerCase().includes(drvColFilters.status.toLowerCase())))
       ));
+
+      const hasTruckFilters = Object.values(truckColFilters).some(Boolean);
+      const hasCompFilters = Object.values(compColFilters).some(Boolean);
+      const hasDriverFilters = Object.values(drvColFilters).some(Boolean);
 
       return (
         <div className="space-y-6">
@@ -3259,6 +3618,19 @@
                     <th className="py-2.5 px-3 text-center">Status</th>
                     <th className="py-2.5 px-3 text-center">Actions</th>
                   </tr>
+                  <tr className="bg-slate-900/90 border-b border-slate-800">
+                    <th className="p-1"><ColFilterInput value={truckColFilters.reg} onChange={v => setTruckColFilters({...truckColFilters, reg: v})} placeholder="Reg..." /></th>
+                    <th className="p-1"><ColFilterInput value={truckColFilters.model} onChange={v => setTruckColFilters({...truckColFilters, model: v})} placeholder="Model..." /></th>
+                    <th className="p-1"><ColFilterInput value={truckColFilters.capacity} onChange={v => setTruckColFilters({...truckColFilters, capacity: v})} placeholder="Capacity..." /></th>
+                    <th className="p-1"><ColFilterInput value={truckColFilters.date} onChange={v => setTruckColFilters({...truckColFilters, date: v})} placeholder="Date..." /></th>
+                    <th className="p-1"><ColFilterInput value={truckColFilters.notes} onChange={v => setTruckColFilters({...truckColFilters, notes: v})} placeholder="Notes..." /></th>
+                    <th className="p-1"><ColFilterInput value={truckColFilters.status} onChange={v => setTruckColFilters({...truckColFilters, status: v})} placeholder="Status..." className="text-center" /></th>
+                    <th className="p-1 text-center">
+                      {hasTruckFilters && (
+                        <button onClick={() => setTruckColFilters({})} className="text-[10px] text-amber-400 hover:underline font-bold">✕ Clear</button>
+                      )}
+                    </th>
+                  </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
                   {filteredTrucks.length === 0 ? (
@@ -3307,6 +3679,18 @@
                     <th className="py-2.5 px-3">GSTIN / Tax ID</th>
                     <th className="py-2.5 px-3 text-center">Actions</th>
                   </tr>
+                  <tr className="bg-slate-900/90 border-b border-slate-800">
+                    <th className="p-1"><ColFilterInput value={compColFilters.name} onChange={v => setCompColFilters({...compColFilters, name: v})} placeholder="Company..." /></th>
+                    <th className="p-1"><ColFilterInput value={compColFilters.contact} onChange={v => setCompColFilters({...compColFilters, contact: v})} placeholder="Contact..." /></th>
+                    <th className="p-1"><ColFilterInput value={compColFilters.phone} onChange={v => setCompColFilters({...compColFilters, phone: v})} placeholder="Phone..." /></th>
+                    <th className="p-1"><ColFilterInput value={compColFilters.email} onChange={v => setCompColFilters({...compColFilters, email: v})} placeholder="Email..." /></th>
+                    <th className="p-1"><ColFilterInput value={compColFilters.gstin} onChange={v => setCompColFilters({...compColFilters, gstin: v})} placeholder="GSTIN..." /></th>
+                    <th className="p-1 text-center">
+                      {hasCompFilters && (
+                        <button onClick={() => setCompColFilters({})} className="text-[10px] text-amber-400 hover:underline font-bold">✕ Clear</button>
+                      )}
+                    </th>
+                  </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
                   {filteredCompanies.length === 0 ? (
@@ -3349,6 +3733,18 @@
                     <th className="py-2.5 px-3">Joining Date</th>
                     <th className="py-2.5 px-3 text-center">Duty Status</th>
                     <th className="py-2.5 px-3 text-center">Actions</th>
+                  </tr>
+                  <tr className="bg-slate-900/90 border-b border-slate-800">
+                    <th className="p-1"><ColFilterInput value={drvColFilters.name} onChange={v => setDrvColFilters({...drvColFilters, name: v})} placeholder="Driver..." /></th>
+                    <th className="p-1"><ColFilterInput value={drvColFilters.phone} onChange={v => setDrvColFilters({...drvColFilters, phone: v})} placeholder="Phone..." /></th>
+                    <th className="p-1"><ColFilterInput value={drvColFilters.license} onChange={v => setDrvColFilters({...drvColFilters, license: v})} placeholder="License..." /></th>
+                    <th className="p-1"><ColFilterInput value={drvColFilters.joining} onChange={v => setDrvColFilters({...drvColFilters, joining: v})} placeholder="Joining..." /></th>
+                    <th className="p-1"><ColFilterInput value={drvColFilters.status} onChange={v => setDrvColFilters({...drvColFilters, status: v})} placeholder="Status..." className="text-center" /></th>
+                    <th className="p-1 text-center">
+                      {hasDriverFilters && (
+                        <button onClick={() => setDrvColFilters({})} className="text-[10px] text-amber-400 hover:underline font-bold">✕ Clear</button>
+                      )}
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
@@ -4230,10 +4626,7 @@
 
           {/* Main Layout Container */}
           <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pb-10">
-            {/* 4 Summary Cards: Visible ONLY on Home Tab */}
-            {activeTab === 'home' && <SummaryCards />}
-
-            {/* Navigation Tab Bar: Fixed visible grid so all tabs are visible without scrolling */}
+            {/* Navigation Tab Bar: Placed at the top so tabs are always accessible first */}
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mb-6">
               {tabs.map(t => (
                 <button
@@ -4250,6 +4643,9 @@
                 </button>
               ))}
             </div>
+
+            {/* 4 Summary Cards: Positioned directly below the tabs on Home Tab */}
+            {activeTab === 'home' && <SummaryCards />}
 
             {/* Tab Views */}
             <div className="animate-fadeIn">
