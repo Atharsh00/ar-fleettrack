@@ -1407,22 +1407,25 @@
             </div>
           )}
 
-          {/* Itemized tables */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Itemized tables - Full width stacked cards for desktop wide visibility without horizontal scrolling */}
+          <div className="space-y-6">
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-lg">
-              <h3 className="font-bold text-white text-sm mb-3">Itemized Trips for Selected Vehicle</h3>
-              <div className="overflow-x-auto max-h-80">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <h3 className="font-bold text-white text-sm">Itemized Trips for Selected Vehicle</h3>
+                <span className="text-xs text-slate-400">({filteredItemizedTrips.length} trips)</span>
+              </div>
+              <div className="overflow-x-auto max-h-96">
                 <table className="w-full text-left text-xs text-slate-300">
-                  <thead className="bg-slate-800/80 text-slate-400 text-[10px]">
+                  <thead className="bg-slate-800/80 text-slate-400 text-[10px] uppercase">
                     <tr>
-                      <th className="p-2">Date</th>
-                      <th className="p-2">Company</th>
-                      <th className="p-2">Route</th>
-                      <th className="p-2 text-right">Rent</th>
-                      <th className="p-2 text-right">Trip Exp</th>
-                      <th className="p-2 text-right">Trip Profit</th>
-                      <th className="p-2 text-right">Received</th>
-                      <th className="p-2 text-right">Pending</th>
+                      <th className="py-2.5 px-2">Date</th>
+                      <th className="py-2.5 px-2">Company</th>
+                      <th className="py-2.5 px-2">Route</th>
+                      <th className="py-2.5 px-2 text-right">Rent</th>
+                      <th className="py-2.5 px-2 text-right">Trip Exp</th>
+                      <th className="py-2.5 px-2 text-right">Trip Profit</th>
+                      <th className="py-2.5 px-2 text-right">Received</th>
+                      <th className="py-2.5 px-2 text-right">Pending</th>
                     </tr>
                     <tr className="bg-slate-900/90 border-b border-slate-800">
                       <th className="p-1"><ColFilterInput value={tripColFilters.date} onChange={v => setTripColFilters({...tripColFilters, date: v})} placeholder="Date..." /></th>
@@ -1457,20 +1460,20 @@
 
                       return (
                         <tr key={t.id} className="hover:bg-slate-800/40">
-                          <td className="p-2 font-mono text-slate-400 whitespace-nowrap">{t.date}</td>
-                          <td className="p-2 font-medium text-amber-400 whitespace-nowrap">{compDisplay}</td>
-                          <td className="p-2 font-medium text-white">{t.route}</td>
-                          <td className="p-2 text-right font-mono text-white font-bold">{formatCurr(t.totalRent)}</td>
-                          <td className="p-2 text-right font-mono text-rose-400" title={`Direct: ${formatCurr(directExp)} | Comm: ${formatCurr(comm)} | Driver: ${formatCurr(drvSal)} | TDS: ${formatCurr(tds)}`}>
+                          <td className="py-2 px-2 font-mono text-slate-400 whitespace-nowrap">{t.date}</td>
+                          <td className="py-2 px-2 font-medium text-amber-400 whitespace-nowrap">{compDisplay}</td>
+                          <td className="py-2 px-2 font-medium text-white">{t.route}</td>
+                          <td className="py-2 px-2 text-right font-mono text-white font-bold whitespace-nowrap">{formatCurr(t.totalRent)}</td>
+                          <td className="py-2 px-2 text-right font-mono text-rose-400 whitespace-nowrap" title={`Direct: ${formatCurr(directExp)} | Comm: ${formatCurr(comm)} | Driver: ${formatCurr(drvSal)} | TDS: ${formatCurr(tds)}`}>
                             {formatCurr(tripExp)}
                           </td>
-                          <td className={`p-2 text-right font-mono font-bold ${tripProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          <td className={`py-2 px-2 text-right font-mono font-bold whitespace-nowrap ${tripProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                             {formatCurr(tripProfit)}
                           </td>
-                          <td className="p-2 text-right font-mono text-emerald-400 font-bold" title={`Advance: ${formatCurr(t.advanceReceived || 0)} + Received: ${formatCurr(t.receivedAmount || 0)}`}>
+                          <td className="py-2 px-2 text-right font-mono text-emerald-400 font-bold whitespace-nowrap" title={`Advance: ${formatCurr(t.advanceReceived || 0)} + Received: ${formatCurr(t.receivedAmount || 0)}`}>
                             {formatCurr(receivedSoFar)}
                           </td>
-                          <td className="p-2 text-right font-mono text-amber-400 font-bold">{formatCurr(balDue)}</td>
+                          <td className="py-2 px-2 text-right font-mono text-amber-400 font-bold whitespace-nowrap">{formatCurr(balDue)}</td>
                         </tr>
                       );
                     })}
@@ -1478,16 +1481,16 @@
                   {filteredItemizedTrips.length > 0 && (
                     <tfoot className="bg-slate-950/90 font-bold border-t-2 border-slate-700 text-white sticky bottom-0">
                       <tr>
-                        <td colSpan="3" className="p-2 text-amber-400 uppercase tracking-wider text-[10px] font-black">
+                        <td colSpan="3" className="py-2 px-2 text-amber-400 uppercase tracking-wider text-[10px] font-black">
                           Total ({filteredItemizedTrips.length} Trips)
                         </td>
-                        <td className="p-2 text-right font-mono font-black text-white">{formatCurr(tripsTotalRent)}</td>
-                        <td className="p-2 text-right font-mono font-black text-rose-400">{formatCurr(tripsTotalExp)}</td>
-                        <td className={`p-2 text-right font-mono font-black ${tripsTotalProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        <td className="py-2 px-2 text-right font-mono font-black text-white whitespace-nowrap">{formatCurr(tripsTotalRent)}</td>
+                        <td className="py-2 px-2 text-right font-mono font-black text-rose-400 whitespace-nowrap">{formatCurr(tripsTotalExp)}</td>
+                        <td className={`py-2 px-2 text-right font-mono font-black whitespace-nowrap ${tripsTotalProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {formatCurr(tripsTotalProfit)}
                         </td>
-                        <td className="p-2 text-right font-mono font-black text-emerald-400">{formatCurr(tripsTotalReceived)}</td>
-                        <td className="p-2 text-right font-mono font-black text-amber-400">{formatCurr(tripsTotalPending)}</td>
+                        <td className="py-2 px-2 text-right font-mono font-black text-emerald-400 whitespace-nowrap">{formatCurr(tripsTotalReceived)}</td>
+                        <td className="py-2 px-2 text-right font-mono font-black text-amber-400 whitespace-nowrap">{formatCurr(tripsTotalPending)}</td>
                       </tr>
                     </tfoot>
                   )}
@@ -1496,15 +1499,18 @@
             </div>
 
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-lg">
-              <h3 className="font-bold text-white text-sm mb-3">Itemized Direct Expenses</h3>
-              <div className="overflow-x-auto max-h-80">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <h3 className="font-bold text-white text-sm">Itemized Direct Expenses</h3>
+                <span className="text-xs text-slate-400">({filteredItemizedExpenses.length} records)</span>
+              </div>
+              <div className="overflow-x-auto max-h-96">
                 <table className="w-full text-left text-xs text-slate-300">
-                  <thead className="bg-slate-800/80 text-slate-400 text-[10px]">
+                  <thead className="bg-slate-800/80 text-slate-400 text-[10px] uppercase">
                     <tr>
-                      <th className="p-2">Date</th>
-                      <th className="p-2">Category</th>
-                      <th className="p-2">Notes</th>
-                      <th className="p-2 text-right">Amount</th>
+                      <th className="py-2.5 px-3">Date</th>
+                      <th className="py-2.5 px-3">Category</th>
+                      <th className="py-2.5 px-3">Notes & Method</th>
+                      <th className="py-2.5 px-3 text-right">Amount</th>
                     </tr>
                     <tr className="bg-slate-900/90 border-b border-slate-800">
                       <th className="p-1"><ColFilterInput value={expColFilters.date} onChange={v => setExpColFilters({...expColFilters, date: v})} placeholder="Date..." /></th>
@@ -1523,20 +1529,20 @@
                   <tbody className="divide-y divide-slate-800">
                     {filteredItemizedExpenses.map(e => (
                       <tr key={e.id} className="hover:bg-slate-800/40">
-                        <td className="p-2 font-mono text-slate-400">{e.date}</td>
-                        <td className="p-2"><span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-200">{e.category}</span></td>
-                        <td className="p-2 text-slate-400 truncate max-w-[120px]">{e.notes || e.paymentMethod}</td>
-                        <td className="p-2 text-right font-mono text-rose-400 font-bold">{formatCurr(e.amount)}</td>
+                        <td className="py-2 px-3 font-mono text-slate-400 whitespace-nowrap">{e.date}</td>
+                        <td className="py-2 px-3 whitespace-nowrap"><span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-200">{e.category}</span></td>
+                        <td className="py-2 px-3 text-slate-300">{e.notes || e.paymentMethod}</td>
+                        <td className="py-2 px-3 text-right font-mono text-rose-400 font-bold whitespace-nowrap">{formatCurr(e.amount)}</td>
                       </tr>
                     ))}
                   </tbody>
                   {filteredItemizedExpenses.length > 0 && (
                     <tfoot className="bg-slate-950/90 font-bold border-t-2 border-slate-700 text-white sticky bottom-0">
                       <tr>
-                        <td colSpan="3" className="p-2 text-amber-400 uppercase tracking-wider text-[10px] font-black">
+                        <td colSpan="3" className="py-2 px-3 text-amber-400 uppercase tracking-wider text-[10px] font-black">
                           Total ({filteredItemizedExpenses.length} Records)
                         </td>
-                        <td className="p-2 text-right font-mono font-black text-rose-400">{formatCurr(expensesTotalAmt)}</td>
+                        <td className="py-2 px-3 text-right font-mono font-black text-rose-400 whitespace-nowrap">{formatCurr(expensesTotalAmt)}</td>
                       </tr>
                     </tfoot>
                   )}
@@ -1931,6 +1937,81 @@
       const [deepDiveCmpId, setDeepDiveCmpId] = useState(null);
       const [editTarget, setEditTarget] = useState(null);
       const [deepColFilters, setDeepColFilters] = useState({});
+      const [payColFilters, setPayColFilters] = useState({});
+
+      // Unified Payments Received for the Selected Company:
+      // Includes Trip Advances, Trip Payments Received, and General Settlements
+      const deepPayments = useMemo(() => {
+        if (!deepDiveCmp) return [];
+        const rows = [];
+        // Trip Advances
+        deepDiveCmp.trips.forEach(t => {
+          const adv = Number(t.advanceReceived || 0);
+          if (adv > 0) {
+            rows.push({
+              id: `adv-${t.id}`,
+              date: t.date || '-',
+              source: 'Trip Advance',
+              details: `Truck: ${getTruckReg ? getTruckReg(t.truckId) : t.truckId} | Route: ${t.route || 'Direct'}`,
+              method: 'Advance',
+              ref: t.id ? `TRIP-${t.id.slice(-6)}` : '-',
+              amount: adv,
+              rawType: 'TRIP',
+              rawObj: t
+            });
+          }
+          // Direct Trip Payments Received
+          const rec = Number(t.receivedAmount || 0);
+          if (rec > 0) {
+            rows.push({
+              id: `rec-${t.id}`,
+              date: t.date || '-',
+              source: 'Trip Payment Received',
+              details: `Truck: ${getTruckReg ? getTruckReg(t.truckId) : t.truckId} | Route: ${t.route || 'Direct'}`,
+              method: 'Direct Receipt',
+              ref: t.id ? `TRIP-${t.id.slice(-6)}` : '-',
+              amount: rec,
+              rawType: 'TRIP',
+              rawObj: t
+            });
+          }
+        });
+        // Ledger Settlements / Receipts
+        deepDiveCmp.settlements.forEach(s => {
+          const amt = Number(s.amount || 0);
+          if (amt > 0) {
+            rows.push({
+              id: `set-${s.id}`,
+              date: s.date || '-',
+              source: 'Account Settlement',
+              details: s.notes || 'Settlement Payment Received',
+              method: s.paymentMethod || 'NEFT',
+              ref: s.referenceNumber || '-',
+              amount: amt,
+              rawType: 'SETTLEMENT',
+              rawObj: s
+            });
+          }
+        });
+        // Sort newest date first
+        return rows.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+      }, [deepDiveCmp, getTruckReg]);
+
+      // Filtered Payments Received
+      const filteredDeepPayments = useMemo(() => {
+        return deepPayments.filter(p => {
+          if (payColFilters.date && !String(p.date || '').toLowerCase().includes(payColFilters.date.toLowerCase())) return false;
+          if (payColFilters.source && !String(p.source || '').toLowerCase().includes(payColFilters.source.toLowerCase())) return false;
+          if (payColFilters.details && !String(p.details || '').toLowerCase().includes(payColFilters.details.toLowerCase())) return false;
+          if (payColFilters.method && !String(p.method || '').toLowerCase().includes(payColFilters.method.toLowerCase())) return false;
+          if (payColFilters.ref && !String(p.ref || '').toLowerCase().includes(payColFilters.ref.toLowerCase())) return false;
+          if (payColFilters.amount && !String(p.amount || '').includes(payColFilters.amount)) return false;
+          return true;
+        });
+      }, [deepPayments, payColFilters]);
+
+      const deepTotalPaymentsReceived = filteredDeepPayments.reduce((s, p) => s + Number(p.amount || 0), 0);
+      const hasPayFilters = Object.values(payColFilters).some(Boolean);
 
       const companyLedgers = companies.map(cmp => {
         const cTrips = filteredTrips.filter(t => t.companyName === cmp.name);
@@ -2163,9 +2244,133 @@
                       </tr>
                     </tfoot>
                   </table>
+
+                  {/* SEPARATE PAYMENTS RECEIVED TABLE */}
+                  <div className="pt-6 mt-6 border-t border-slate-800 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <h4 className="text-sm font-bold text-emerald-400 flex items-center gap-2">
+                          <span>💰 Itemized Payments Received from {deepDiveCmp.cmp.name}</span>
+                          <span className="text-[11px] font-normal text-slate-400">({filteredDeepPayments.length} records)</span>
+                        </h4>
+                        <p className="text-[11px] text-slate-400">Trip advances, trip payments received, and general settlement receipts with corresponding dates</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center gap-3 text-xs font-mono">
+                          <span className="text-slate-400 text-[11px]">Outstanding Due:</span>
+                          <span className="text-amber-400 font-bold text-sm">{formatCurr(deepDiveCmp.balanceDue)}</span>
+                        </div>
+                        {deepDiveCmp.balanceDue > 0 && (
+                          <button
+                            onClick={() => { setSettleModal(deepDiveCmp); setSettleAmt(deepDiveCmp.balanceDue); }}
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs shadow transition"
+                          >
+                            + Record Receipt
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto rounded-xl border border-slate-800">
+                      <table className="w-full text-left text-xs text-slate-300">
+                        <thead className="bg-slate-800/80 text-[10px] uppercase text-slate-400">
+                          <tr>
+                            <th className="p-2.5">Date</th>
+                            <th className="p-2.5">Payment Type</th>
+                            <th className="p-2.5">Associated Trip / Details</th>
+                            <th className="p-2.5">Method</th>
+                            <th className="p-2.5">Ref / UTR</th>
+                            <th className="p-2.5 text-right">Amount Received</th>
+                            <th className="p-2.5 text-right">Remaining Due</th>
+                            <th className="p-2.5 text-center">Action</th>
+                          </tr>
+                          <tr className="bg-slate-900/90 border-b border-slate-800">
+                            <th className="p-1"><ColFilterInput value={payColFilters.date} onChange={v => setPayColFilters({...payColFilters, date: v})} placeholder="Date..." /></th>
+                            <th className="p-1"><ColFilterInput value={payColFilters.source} onChange={v => setPayColFilters({...payColFilters, source: v})} placeholder="Type..." /></th>
+                            <th className="p-1"><ColFilterInput value={payColFilters.details} onChange={v => setPayColFilters({...payColFilters, details: v})} placeholder="Details..." /></th>
+                            <th className="p-1"><ColFilterInput value={payColFilters.method} onChange={v => setPayColFilters({...payColFilters, method: v})} placeholder="Method..." /></th>
+                            <th className="p-1"><ColFilterInput value={payColFilters.ref} onChange={v => setPayColFilters({...payColFilters, ref: v})} placeholder="Ref..." /></th>
+                            <th className="p-1"><ColFilterInput value={payColFilters.amount} onChange={v => setPayColFilters({...payColFilters, amount: v})} placeholder="Amount..." className="text-right" /></th>
+                            <th className="p-1"></th>
+                            <th className="p-1 text-center">
+                              {hasPayFilters && (
+                                <button onClick={() => setPayColFilters({})} className="text-[10px] text-amber-400 hover:underline font-bold">✕ Clear</button>
+                              )}
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800">
+                          {filteredDeepPayments.length === 0 ? (
+                            <tr>
+                              <td colSpan={8} className="p-4 text-center text-slate-500 italic">
+                                No payments recorded yet for this client.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredDeepPayments.map(p => (
+                              <tr key={p.id} className="hover:bg-slate-800/40">
+                                <td className="p-2.5 font-mono text-slate-400 whitespace-nowrap">{p.date}</td>
+                                <td className="p-2.5 font-bold whitespace-nowrap">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] ${
+                                    p.source === 'Trip Advance' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
+                                    p.source === 'Trip Payment Received' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                                    'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                                  }`}>
+                                    {p.source}
+                                  </span>
+                                </td>
+                                <td className="p-2.5 text-slate-300">{p.details}</td>
+                                <td className="p-2.5 text-slate-400 whitespace-nowrap">{p.method}</td>
+                                <td className="p-2.5 font-mono text-slate-400 whitespace-nowrap">{p.ref}</td>
+                                <td className="p-2.5 text-right font-mono text-emerald-400 font-bold whitespace-nowrap">
+                                  +{formatCurr(p.amount)}
+                                </td>
+                                <td className="p-2.5 text-right font-mono text-amber-400/90 whitespace-nowrap">
+                                  {formatCurr(deepDiveCmp.balanceDue)}
+                                </td>
+                                <td className="p-2.5 text-center whitespace-nowrap">
+                                  <div className="flex items-center justify-center gap-2">
+                                    <button onClick={() => setEditTarget({ type: p.rawType, data: p.rawObj })} className="text-amber-400 hover:underline">
+                                      Edit
+                                    </button>
+                                    <button onClick={() => {
+                                      if (confirm(`Delete this payment receipt? Outstanding balances will recalculate.`)) {
+                                        if (p.rawType === 'SETTLEMENT') deleteSettlement(p.rawObj.id);
+                                        else if (p.rawType === 'TRIP') {
+                                          if (confirm(`Do you want to reset payment received to ₹0 for this trip?`)) {
+                                            updateTrip(p.rawObj.id, { ...p.rawObj, receivedAmount: 0 });
+                                          }
+                                        }
+                                      }
+                                    }} className="text-rose-400 hover:underline">
+                                      Delete
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                        <tfoot className="bg-slate-950 font-bold border-t-2 border-slate-700 text-white">
+                          <tr>
+                            <td colSpan={5} className="p-2.5 uppercase tracking-wider text-emerald-400 font-extrabold text-[11px]">
+                              Total Payments Received ({filteredDeepPayments.length} Records)
+                            </td>
+                            <td className="p-2.5 text-right font-mono text-emerald-400 font-extrabold text-sm">
+                              +{formatCurr(deepTotalPaymentsReceived)}
+                            </td>
+                            <td className="p-2.5 text-right font-mono text-amber-400 font-extrabold text-sm whitespace-nowrap">
+                              Due: {formatCurr(deepDiveCmp.balanceDue)}
+                            </td>
+                            <td></td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
                 </div>
                 <div className="pt-3 border-t border-slate-800 flex justify-end">
-                  <button onClick={() => { setDeepDiveCmpId(null); setDeepColFilters({}); }} className="px-4 py-2 bg-slate-800 text-white rounded-lg text-xs font-semibold">Done</button>
+                  <button onClick={() => { setDeepDiveCmpId(null); setDeepColFilters({}); setPayColFilters({}); }} className="px-4 py-2 bg-slate-800 text-white rounded-lg text-xs font-semibold">Done</button>
                 </div>
               </div>
             </div>
