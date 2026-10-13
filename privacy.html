@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy - AR FleetTrack</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #111827;
+      --border: #1f2937;
+      --text: #f3f4f6;
+      --muted: #9ca3af;
+      --primary: #3b82f6;
+      --accent: #10b981;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem 1rem;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2.5rem;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+    }
+    .header {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .badge {
+      display: inline-block;
+      background: rgba(59, 130, 246, 0.15);
+      color: var(--primary);
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #ffffff;
+      margin-bottom: 0.5rem;
+    }
+    .updated {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    h2 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #e5e7eb;
+      margin-top: 1.75rem;
+      margin-bottom: 0.75rem;
+    }
+    p {
+      color: #d1d5db;
+      margin-bottom: 1rem;
+      font-size: 0.975rem;
+    }
+    ul {
+      list-style-type: disc;
+      padding-left: 1.5rem;
+      margin-bottom: 1rem;
+      color: #d1d5db;
+    }
+    li {
+      margin-bottom: 0.5rem;
+    }
+    .callout {
+      background: rgba(16, 185, 129, 0.1);
+      border-left: 4px solid var(--accent);
+      padding: 1rem 1.25rem;
+      border-radius: 0 8px 8px 0;
+      margin: 1.5rem 0;
+    }
+    .callout p {
+      margin: 0;
+      color: #a7f3d0;
+      font-size: 0.95rem;
+    }
+    a {
+      color: var(--primary);
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    .footer {
+      margin-top: 2.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <span class="badge">Privacy Policy</span>
+      <h1>AR FleetTrack</h1>
+      <p class="updated">Last Updated: October 14, 2026</p>
+    </div>
+
+    <h2>1. Introduction</h2>
+    <p>
+      AR FleetTrack ("we", "our", or "the application") is a logistics management platform designed to help fleet owners track trips, company freight receivables, driver payables, vehicle performance, and operating expenses. This Privacy Policy details our practices concerning data collection, usage, and user privacy.
+    </p>
+
+    <h2>2. Information We Collect</h2>
+    <p>
+      AR FleetTrack is engineered with privacy as a fundamental priority:
+    </p>
+    <ul>
+      <li><strong>Operational Fleet Data:</strong> Trip logs, truck registration numbers, client billing amounts, driver wage records, and fuel receipts entered into the application. This data is stored locally in your browser's persistent storage (IndexedDB/LocalStorage) and remains on your device.</li>
+      <li><strong>Google User Data (Optional Integration):</strong> If you choose to enable automated expense synchronization with Google, the app connects using Google OAuth 2.0 to access your Gmail messages.</li>
+    </ul>
+
+    <h2>3. How We Use Google User Data</h2>
+    <p>
+      When you connect your Google Account, AR FleetTrack requests the <code>https://www.googleapis.com/auth/gmail.readonly</code> scope. We use this access exclusively for the following purpose:
+    </p>
+    <ul>
+      <li>Scanning incoming emails strictly to extract logistical expenses (such as toll passes, FASTag deductions, fuel purchases, repair invoices, and maintenance receipts).</li>
+      <li>Tagging and organizing these extracted expenses against your active fleet vehicles in your private dashboard.</li>
+    </ul>
+
+    <div class="callout">
+      <p>
+        <strong>Google API Limited Use Disclosure:</strong> AR FleetTrack's use and transfer to any other app of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy#additional_requirements_for_specific_api_scopes" target="_blank" rel="noopener noreferrer">Google API Services User Data Policy</a>, including the Limited Use requirements.
+      </p>
+    </div>
+
+    <h2>4. Data Retention, Security & Sharing</h2>
+    <ul>
+      <li><strong>No Data Selling or Advertising:</strong> We do not sell, rent, or trade your personal data, logistical operational data, or email content to third parties or data brokers. Your data is never used for advertising purposes.</li>
+      <li><strong>No Server-Side Storing of Email Contents:</strong> Email scanning and receipt parsing execute entirely client-side in your secure browser session. Your email credentials and tokens are stored solely in your local browser and are never sent to external third-party tracking servers.</li>
+      <li><strong>Local Data Control:</strong> You can export, back up, or completely wipe all your stored records and credentials at any time from the application's Settings tab.</li>
+    </ul>
+
+    <h2>5. Revoking Permissions</h2>
+    <p>
+      You can disconnect your Google account from AR FleetTrack at any time directly through the app interface by clicking <strong>Disconnect / Log Out</strong>, or directly through Google Account Security Settings at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">https://myaccount.google.com/permissions</a>.
+    </p>
+
+    <h2>6. Contact Us</h2>
+    <p>
+      If you have questions, concerns, or requests regarding this Privacy Policy or how your data is handled, please contact the administrator via your registered support contact details.
+    </p>
+
+    <div class="footer">
+      &copy; 2026 AR FleetTrack. All rights reserved. &bull; <a href="/">Return to Dashboard</a>
+    </div>
+  </div>
+</body>
+</html>
