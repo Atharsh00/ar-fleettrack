@@ -1155,127 +1155,11 @@
       );
     }
 
-    // --- TAB 1: OVERVIEW DASHBOARD ---
-    function OverviewTab({ setActiveTab }) {
-      const { filteredTrips, filteredExpenses, summaryMetrics, trucks, getTripBalancePending } = useFleet();
-      const expenseCatTotals = { DIESEL: 0, MAINTENANCE: 0, TOLL: 0, INSURANCE: 0, PERMITS: 0, SPARE_PARTS: 0, OTHER: 0 };
-      filteredExpenses.forEach(e => {
-        if (expenseCatTotals[e.category] !== undefined) expenseCatTotals[e.category] += Number(e.amount);
-        else expenseCatTotals.OTHER += Number(e.amount);
-      });
-      const totalExp = summaryMetrics.totalDirectExpenses || 1;
-
+    // --- TAB 1: HOME PAGE (ONLY 4 TOP SUMMARY BUTTONS/CARDS) ---
+    function HomeTab() {
       return (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-lg">
-              <div className="flex justify-between items-center mb-4">
-                <div>
-                  <h3 className="font-bold text-white text-base">Fleet Direct Expense Categories</h3>
-                  <p className="text-xs text-slate-400">Total operational costs: {formatCurr(summaryMetrics.totalDirectExpenses)}</p>
-                </div>
-                <button onClick={() => setActiveTab('truck_performance')} className="text-xs text-amber-400 hover:underline">
-                  Vehicle P&L &rarr;
-                </button>
-              </div>
-
-              <div className="space-y-3">
-                {Object.entries(expenseCatTotals).map(([cat, amt]) => {
-                  const pct = Math.round((amt / totalExp) * 100);
-                  const colors = { DIESEL: 'bg-amber-500', MAINTENANCE: 'bg-blue-500', TOLL: 'bg-emerald-500', INSURANCE: 'bg-purple-500', PERMITS: 'bg-indigo-500', SPARE_PARTS: 'bg-rose-500', OTHER: 'bg-slate-500' };
-                  return (
-                    <div key={cat} className="space-y-1">
-                      <div className="flex justify-between text-xs">
-                        <span className="text-slate-300 font-medium">{cat}</span>
-                        <span className="font-mono text-slate-400">{pct}% ({formatCurr(amt)})</span>
-                      </div>
-                      <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
-                        <div className={`h-full ${colors[cat]} transition-all duration-500`} style={{ width: `${pct}%` }}></div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col justify-between">
-              <div>
-                <h3 className="font-bold text-white text-base mb-2">Fleet Operational Actions</h3>
-                <p className="text-xs text-slate-400 mb-4">Quick shortcuts to enter freight trips, manage expenses, and record client settlements:</p>
-                <div className="space-y-2.5">
-                  <button
-                    onClick={() => setActiveTab('data_entry')}
-                    className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white font-bold text-xs rounded-xl transition flex items-center justify-between"
-                  >
-                    <span>➕ New Trip Freight Entry</span>
-                    <span className="text-amber-400">&rarr;</span>
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('company_accounts')}
-                    className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white font-bold text-xs rounded-xl transition flex items-center justify-between"
-                  >
-                    <span>🏢 Company Receivables & Dues</span>
-                    <span className="text-amber-400">&rarr;</span>
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('driver_ledger')}
-                    className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white font-bold text-xs rounded-xl transition flex items-center justify-between"
-                  >
-                    <span>👨‍✈️ Driver Payouts & Claims</span>
-                    <span className="text-purple-400">&rarr;</span>
-                  </button>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setActiveTab('data_entry')}
-                className="mt-4 w-full py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg transition"
-              >
-                + Create New Trip or Expense
-              </button>
-            </div>
-          </div>
-
-          {/* Recent Trips Stream */}
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-lg">
-            <h3 className="font-bold text-white text-base mb-3">Recent Trips in Selected Period</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-slate-300">
-                <thead className="bg-slate-800/80 text-slate-400 uppercase text-[10px]">
-                  <tr>
-                    <th className="py-2.5 px-3">Date</th>
-                    <th className="py-2.5 px-3">Route / Truck</th>
-                    <th className="py-2.5 px-3">Client Company</th>
-                    <th className="py-2.5 px-3">Driver</th>
-                    <th className="py-2.5 px-3 text-right">Gross Rent</th>
-                    <th className="py-2.5 px-3 text-right">TDS (1%)</th>
-                    <th className="py-2.5 px-3 text-right">Balance Due</th>
-                    <th className="py-2.5 px-3 text-right">Driver Salary (15%)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800">
-                  {filteredTrips.slice(0, 6).map(t => {
-                    const trk = trucks.find(x => x.id === t.truckId);
-                    return (
-                      <tr key={t.id} className="hover:bg-slate-800/40">
-                        <td className="py-3 px-3 font-mono text-slate-400">{t.date}</td>
-                        <td className="py-3 px-3">
-                          <div className="font-semibold text-white">{t.route}</div>
-                          <div className="text-[10px] text-slate-400 font-mono">{trk ? trk.registrationNumber : t.truckId}</div>
-                        </td>
-                        <td className="py-3 px-3 text-slate-200">{t.companyName}</td>
-                        <td className="py-3 px-3 text-purple-300">{t.driverName}</td>
-                        <td className="py-3 px-3 text-right font-mono font-bold text-white">{formatCurr(t.totalRent)}</td>
-                        <td className="py-3 px-3 text-right font-mono text-emerald-400">{formatCurr(t.tdsAmount || 0)}</td>
-                        <td className="py-3 px-3 text-right font-mono text-amber-400 font-bold">{formatCurr(getTripBalancePending ? getTripBalancePending(t) : t.balancePending)}</td>
-                        <td className="py-3 px-3 text-right font-mono text-purple-300 font-bold">{formatCurr(t.driverCommission)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <SummaryCards />
         </div>
       );
     }
@@ -3805,34 +3689,6 @@
                   </button>
                 </div>
               </form>
-
-              {/* CARD 4: HOW OPTION 1 WORKS (100% FREE FOREVER) */}
-              <div className="pt-4 border-t border-slate-800 grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 text-xs">
-                  <div className="text-amber-400 font-bold mb-1 flex items-center gap-1.5">
-                    <span>1️⃣</span> 100% Free Forever
-                  </div>
-                  <p className="text-[11px] text-slate-400">
-                    Google provides 1 Billion API quota units per day completely free. No paid email router or custom domain purchase is ever needed.
-                  </p>
-                </div>
-                <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 text-xs">
-                  <div className="text-emerald-400 font-bold mb-1 flex items-center gap-1.5">
-                    <span>2️⃣</span> Automatic Trip Tagging
-                  </div>
-                  <p className="text-[11px] text-slate-400">
-                    When an email arrives, our AI engine extracts the vehicle number (e.g. MH-12-RN-4825) & amount (₹) and instantly links the expense to that truck's active trip.
-                  </p>
-                </div>
-                <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 text-xs">
-                  <div className="text-blue-400 font-bold mb-1 flex items-center gap-1.5">
-                    <span>3️⃣</span> Zero Duplicates
-                  </div>
-                  <p className="text-[11px] text-slate-400">
-                    Processed alerts are automatically marked as read so you will never get duplicate entries in your ledger or financial reports.
-                  </p>
-                </div>
-              </div>
             </div>
           )}
 
@@ -4274,7 +4130,7 @@
     // --- MAIN APP COMPONENT ---
     function App() {
       const { currentUser, logout, profiles, activeProfileId, setActiveProfileId, addProfile, updateProfile, deleteProfile } = useFleet();
-      const [activeTab, setActiveTab] = useState('overview');
+      const [activeTab, setActiveTab] = useState('home');
       const [showProfModal, setShowProfModal] = useState(false);
       const [newProfName, setNewProfName] = useState('');
 
@@ -4284,7 +4140,7 @@
       }
 
       const tabs = [
-        { id: 'overview', label: 'Overview Dashboard', icon: '📊' },
+        { id: 'home', label: 'Home', icon: '🏠' },
         { id: 'truck_performance', label: 'Truck Performance', icon: '🚛' },
         { id: 'company_accounts', label: 'Company Receivables', icon: '🏢' },
         { id: 'driver_ledger', label: 'Driver Ledger', icon: '👨‍✈️' },
@@ -4306,7 +4162,7 @@
           {/* Header with Profile Switcher, User Details & Logout */}
           <header className="bg-slate-900 border-b border-slate-800">
             <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap justify-between items-center gap-3">
-              <div className="flex items-center gap-3.5 cursor-pointer group" onClick={() => setActiveTab('overview')}>
+              <div className="flex items-center gap-3.5 cursor-pointer group" onClick={() => setActiveTab('home')}>
                 <ARLogo className="w-11 h-11 transition-transform group-hover:scale-105 duration-200" />
                 <div>
                   <div className="flex items-center gap-2">
@@ -4374,8 +4230,8 @@
 
           {/* Main Layout Container */}
           <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pb-10">
-            {/* 4 Summary Cards */}
-            <SummaryCards />
+            {/* 4 Summary Cards: Visible ONLY on Home Tab */}
+            {activeTab === 'home' && <SummaryCards />}
 
             {/* Navigation Tab Bar: Fixed visible grid so all tabs are visible without scrolling */}
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mb-6">
@@ -4397,7 +4253,7 @@
 
             {/* Tab Views */}
             <div className="animate-fadeIn">
-              {activeTab === 'overview' && <OverviewTab setActiveTab={setActiveTab} />}
+              {activeTab === 'home' && null}
               {activeTab === 'truck_performance' && <TruckPerformanceTab />}
               {activeTab === 'company_accounts' && <CompanyAccountsTab />}
               {activeTab === 'driver_ledger' && <DriverLedgerTab />}
