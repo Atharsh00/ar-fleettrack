@@ -1199,7 +1199,7 @@
 
     // --- TAB 2: TRUCK PERFORMANCE (STATUS BADGE REMOVED) ---
     function TruckPerformanceTab() {
-      const { trucks, filteredTrips, filteredExpenses, filteredDriverPayments, getCompanyName, getTripExpenses, getTripProfit, getTripBalancePending } = useFleet();
+      const { trucks, trips, filteredTrips, filteredExpenses, filteredDriverPayments, getCompanyName, getTripExpenses, getTripProfit, getTripBalancePending } = useFleet();
       const [selTruck, setSelTruck] = useState('all');
 
       // Column filter states
@@ -1313,13 +1313,17 @@
       // Itemized Expenses with Column Filters
       const filteredItemizedExpenses = useMemo(() => {
         return displayedExpenses.filter(e => {
+          const linkedTrip = e.tripId ? (trips || filteredTrips || []).find(t => t.id === e.tripId) : null;
+          const tripLinkDesc = e.tripId ? `Linked Trip: ${linkedTrip?.route || ''} ${linkedTrip?.date || ''} ${e.tripId}` : 'General Expense';
+
           if (expColFilters.date && !String(e.date || '').toLowerCase().includes(expColFilters.date.toLowerCase())) return false;
           if (expColFilters.category && !String(e.category || '').toLowerCase().includes(expColFilters.category.toLowerCase())) return false;
+          if (expColFilters.scope && !tripLinkDesc.toLowerCase().includes(expColFilters.scope.toLowerCase())) return false;
           if (expColFilters.notes && !String(e.notes || e.paymentMethod || '').toLowerCase().includes(expColFilters.notes.toLowerCase())) return false;
           if (expColFilters.amount && !String(e.amount || '').includes(expColFilters.amount)) return false;
           return true;
         });
-      }, [displayedExpenses, expColFilters]);
+      }, [displayedExpenses, expColFilters, trips, filteredTrips]);
 
       // Itemized Expenses Totals (dynamically calculated over filteredItemizedExpenses)
       const expensesTotalAmt = filteredItemizedExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
@@ -1552,12 +1556,14 @@
                     <tr>
                       <th className="py-2.5 px-3">Date</th>
                       <th className="py-2.5 px-3">Category</th>
+                      <th className="py-2.5 px-3">Trip Link / Scope</th>
                       <th className="py-2.5 px-3">Notes & Method</th>
                       <th className="py-2.5 px-3 text-right">Amount</th>
                     </tr>
                     <tr className="bg-slate-900/90 border-b border-slate-800">
                       <th className="p-1"><ColFilterInput value={expColFilters.date} onChange={v => setExpColFilters({...expColFilters, date: v})} placeholder="Date..." /></th>
                       <th className="p-1"><ColFilterInput value={expColFilters.category} onChange={v => setExpColFilters({...expColFilters, category: v})} placeholder="Category..." /></th>
+                      <th className="p-1"><ColFilterInput value={expColFilters.scope} onChange={v => setExpColFilters({...expColFilters, scope: v})} placeholder="Scope / Trip..." /></th>
                       <th className="p-1"><ColFilterInput value={expColFilters.notes} onChange={v => setExpColFilters({...expColFilters, notes: v})} placeholder="Notes/Method..." /></th>
                       <th className="p-1">
                         <div className="flex items-center gap-1">
@@ -1570,23 +1576,42 @@
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
-                    {filteredItemizedExpenses.map(e => (
-                      <tr key={e.id} className="hover:bg-slate-800/40">
-                        <td className="py-2 px-3 font-mono text-slate-400 whitespace-nowrap">{e.date}</td>
-                        <td className="py-2 px-3 whitespace-nowrap">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${e.itemType === 'DRIVER_CLAIM' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-slate-800 text-slate-200'}`}>
-                            {e.category}
-                          </span>
-                        </td>
-                        <td className="py-2 px-3 text-slate-300">{e.notes || e.paymentMethod}</td>
-                        <td className="py-2 px-3 text-right font-mono text-rose-400 font-bold whitespace-nowrap">{formatCurr(e.amount)}</td>
-                      </tr>
-                    ))}
+                    {filteredItemizedExpenses.map(e => {
+                      const linkedTrip = e.tripId ? (trips || filteredTrips || []).find(t => t.id === e.tripId) : null;
+                      return (
+                        <tr key={e.id} className="hover:bg-slate-800/40">
+                          <td className="py-2 px-3 font-mono text-slate-400 whitespace-nowrap">{e.date}</td>
+                          <td className="py-2 px-3 whitespace-nowrap">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${e.itemType === 'DRIVER_CLAIM' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-slate-800 text-slate-200'}`}>
+                              {e.category}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 whitespace-nowrap">
+                            {e.tripId ? (
+                              <span
+                                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/25"
+                                title={linkedTrip ? `Route: ${linkedTrip.route} | Date: ${linkedTrip.date}` : `Trip ID: ${e.tripId}`}
+                              >
+                                <span>🔗</span>
+                                <span>{linkedTrip ? `${linkedTrip.route} (${linkedTrip.date})` : `Trip: ${e.tripId.slice(-6)}`}</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-400 border border-slate-700/60">
+                                <span>📦</span>
+                                <span>General Expense</span>
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-slate-300">{e.notes || e.paymentMethod}</td>
+                          <td className="py-2 px-3 text-right font-mono text-rose-400 font-bold whitespace-nowrap">{formatCurr(e.amount)}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                   {filteredItemizedExpenses.length > 0 && (
                     <tfoot className="bg-slate-950/90 font-bold border-t-2 border-slate-700 text-white sticky bottom-0">
                       <tr>
-                        <td colSpan="3" className="py-2 px-3 text-amber-400 uppercase tracking-wider text-[10px] font-black">
+                        <td colSpan="4" className="py-2 px-3 text-amber-400 uppercase tracking-wider text-[10px] font-black">
                           Total ({filteredItemizedExpenses.length} Records)
                         </td>
                         <td className="py-2 px-3 text-right font-mono font-black text-rose-400 whitespace-nowrap">{formatCurr(expensesTotalAmt)}</td>
@@ -2000,7 +2025,20 @@
 
     // --- TAB 3: COMPANY ACCOUNTS & RECEIVABLES LEDGER ---
     function CompanyAccountsTab() {
-      const { companies, filteredTrips, filteredSettlements, addSettlement, deleteTrip, deleteSettlement, getTruckReg, getTripReimbursable, getTripBalancePending } = useFleet();
+      const {
+        companies,
+        filteredTrips,
+        filteredExpenses,
+        filteredSettlements,
+        addSettlement,
+        updateTrip,
+        deleteTrip,
+        deleteSettlement,
+        deleteTruckExpense,
+        getTruckReg,
+        getTripReimbursable,
+        getTripBalancePending,
+      } = useFleet();
       const [settleModal, setSettleModal] = useState(null);
       const [settleAmt, setSettleAmt] = useState('');
       const [settleMethod, setSettleMethod] = useState('NEFT');

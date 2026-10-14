@@ -12,8 +12,8 @@ cd /d "C:\Users\athar\.gemini\antigravity\scratch\fleet-management"
 echo [1/3] Adding all files...
 git add -A
 
-echo [2/3] Committing updates: Incorporate Driver Expense Claims into Truck & Trip Operating Costs...
-git commit -m "Feat: Link driver expense claims to Truck and Trip in Data Entry, Driver Ledger, and Edit modals; include in vehicle & trip operating costs"
+echo [2/3] Committing updates: Fix Company Receivables tab and add Trip Link column to Truck Performance...
+git commit -m "Fix: Company Receivables tab crash by adding missing dependencies; add Trip Link / Scope column to Truck Performance expenses table"
 
 echo [3/3] Pushing to GitHub main branch...
 git push -u origin main
@@ -21,7 +21,7 @@ git push -u origin main
 echo.
 echo ==============================================================================
 echo Done! Please check https://github.com/Atharsh00/ar-fleettrack
-echo The latest commit will show: "Feat: Link driver expense claims to Truck and Trip in Data Entry, Driver Ledger, and Edit modals; include in vehicle & trip operating costs"
+echo The latest commit will show: "Fix: Company Receivables tab crash by adding missing dependencies; add Trip Link / Scope column to Truck Performance expenses table"
 echo ==============================================================================
 echo.
 pause
