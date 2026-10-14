@@ -649,6 +649,8 @@
           profileId: activeProfileId,
           date: input.date,
           driverName: input.driverName,
+          truckId: input.truckId || undefined,
+          tripId: input.tripId || undefined,
           type: input.type,
           amount: Number(input.amount) || 0,
           paymentMethod: input.paymentMethod,
@@ -759,8 +761,10 @@
         return found ? found.name : idOrName;
       };
       const getTripExpenses = (tripId) => {
-        // Direct operational expenses only (excludes reimbursable expenses incurred on behalf of client)
-        return scopedExpenses.filter(e => e.tripId === tripId && !e.isReimbursable).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+        // Direct operational truck expenses (excluding client reimbursable) + roadside driver expense claims linked to this trip
+        const truckDirectExp = scopedExpenses.filter(e => e.tripId === tripId && !e.isReimbursable).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+        const drvClaims = scopedDriverPayments.filter(p => p.tripId === tripId && p.type === 'DRIVER_EXPENSE').reduce((sum, p) => sum + Number(p.amount || 0), 0);
+        return truckDirectExp + drvClaims;
       };
       const getTripReimbursable = (tripId) => {
         return scopedExpenses.filter(e => e.tripId === tripId && e.isReimbursable).reduce((sum, e) => sum + Number(e.amount || 0), 0);
@@ -785,7 +789,7 @@
         const comm = Number(trip.commissionAmount || 0);
         const tds = Number(trip.tdsAmount || 0);
         const drvSal = Number(trip.driverCommission || 0);
-        // Trip Profit = Gross Rent - (Direct Operational Expenses + Driver Salary + Broker Commission + TDS)
+        // Trip Profit = Gross Rent - (Direct Operational Expenses & Driver Claims + Driver Salary + Broker Commission + TDS)
         return Number(trip.totalRent || 0) - (directOperationalExp + drvSal + comm + tds);
       };
 
@@ -1195,7 +1199,7 @@
 
     // --- TAB 2: TRUCK PERFORMANCE (STATUS BADGE REMOVED) ---
     function TruckPerformanceTab() {
-      const { trucks, filteredTrips, filteredExpenses, getCompanyName, getTripExpenses, getTripProfit, getTripBalancePending } = useFleet();
+      const { trucks, filteredTrips, filteredExpenses, filteredDriverPayments, getCompanyName, getTripExpenses, getTripProfit, getTripBalancePending } = useFleet();
       const [selTruck, setSelTruck] = useState('all');
 
       // Column filter states
@@ -1207,13 +1211,14 @@
         const trkTrips = filteredTrips.filter(t => t.truckId === trk.id);
         // Exclude reimbursable expenses from vehicle operating costs
         const trkDirectExpenses = filteredExpenses.filter(e => e.truckId === trk.id && !e.isReimbursable).reduce((s, e) => s + Number(e.amount), 0);
+        const trkDriverClaims = (filteredDriverPayments || []).filter(p => p.truckId === trk.id && p.type === 'DRIVER_EXPENSE').reduce((s, p) => s + Number(p.amount || 0), 0);
         const trkDriverWages = trkTrips.reduce((s, t) => s + Number(t.driverCommission || 0), 0);
         const trkCommissions = trkTrips.reduce((s, t) => s + Number(t.commissionAmount || 0), 0);
         const trkTds = trkTrips.reduce((s, t) => s + Number(t.tdsAmount || 0), 0);
         
         const rev = trkTrips.reduce((s, t) => s + Number(t.totalRent), 0);
-        // Total vehicle operating costs = direct operational expenses + driver salaries + broker commissions + TDS
-        const exp = trkDirectExpenses + trkDriverWages + trkCommissions + trkTds;
+        // Total vehicle operating costs = direct operational expenses + driver claims + driver salaries + broker commissions + TDS
+        const exp = trkDirectExpenses + trkDriverClaims + trkDriverWages + trkCommissions + trkTds;
         const profit = rev - exp;
         const margin = rev > 0 ? (profit / rev) * 100 : 0;
         return { trk, trips: trkTrips, expenses: filteredExpenses.filter(e => e.truckId === trk.id), rev, exp, profit, margin };
@@ -1244,7 +1249,28 @@
 
       // Filtered lists for itemized tables
       const displayedTrips = selTruck === 'all' ? filteredTrips : filteredTrips.filter(t => t.truckId === selTruck);
-      const displayedExpenses = selTruck === 'all' ? filteredExpenses : filteredExpenses.filter(e => e.truckId === selTruck);
+      // Combine direct truck expenses and driver expense claims tagged to truck
+      const displayedExpenses = useMemo(() => {
+        const direct = (selTruck === 'all' ? filteredExpenses : filteredExpenses.filter(e => e.truckId === selTruck)).map(e => ({
+          ...e,
+          itemType: 'TRUCK_EXP'
+        }));
+        const claims = (filteredDriverPayments || [])
+          .filter(p => p.type === 'DRIVER_EXPENSE' && (selTruck === 'all' ? Boolean(p.truckId) : p.truckId === selTruck))
+          .map(p => ({
+            id: p.id,
+            date: p.date,
+            truckId: p.truckId,
+            tripId: p.tripId,
+            category: 'DRIVER CLAIM',
+            notes: `${p.driverName}: ${p.description || 'Roadside Claim'}`,
+            paymentMethod: p.paymentMethod || 'Driver Claim',
+            amount: p.amount,
+            isReimbursable: false,
+            itemType: 'DRIVER_CLAIM'
+          }));
+        return [...direct, ...claims].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      }, [filteredExpenses, filteredDriverPayments, selTruck]);
 
       // Itemized Trips with Column Filters
       const filteredItemizedTrips = useMemo(() => {
@@ -1517,7 +1543,7 @@
 
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-lg">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                <h3 className="font-bold text-white text-sm">Itemized Direct Expenses</h3>
+                <h3 className="font-bold text-white text-sm">Itemized Direct Expenses & Driver Claims</h3>
                 <span className="text-xs text-slate-400">({filteredItemizedExpenses.length} records)</span>
               </div>
               <div className="overflow-x-auto max-h-96">
@@ -1547,7 +1573,11 @@
                     {filteredItemizedExpenses.map(e => (
                       <tr key={e.id} className="hover:bg-slate-800/40">
                         <td className="py-2 px-3 font-mono text-slate-400 whitespace-nowrap">{e.date}</td>
-                        <td className="py-2 px-3 whitespace-nowrap"><span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-200">{e.category}</span></td>
+                        <td className="py-2 px-3 whitespace-nowrap">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${e.itemType === 'DRIVER_CLAIM' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-slate-800 text-slate-200'}`}>
+                            {e.category}
+                          </span>
+                        </td>
                         <td className="py-2 px-3 text-slate-300">{e.notes || e.paymentMethod}</td>
                         <td className="py-2 px-3 text-right font-mono text-rose-400 font-bold whitespace-nowrap">{formatCurr(e.amount)}</td>
                       </tr>
@@ -1621,6 +1651,8 @@
       const [dpType, setDpType] = useState(target.data.type || 'SALARY_PAYOUT');
       const [dpAmt, setDpAmt] = useState(target.data.amount?.toString() || '');
       const [dpDesc, setDpDesc] = useState(target.data.description || '');
+      const [dpTruck, setDpTruck] = useState(target.data.truckId || '');
+      const [dpTripId, setDpTripId] = useState(target.data.tripId || '');
 
       // SETTLEMENT STATE
       const [setDate, setSetDate] = useState(target.data.date || '');
@@ -1672,6 +1704,8 @@
           updateDriverPayment(target.data.id, {
             date: dpDate,
             driverName: dpDriver,
+            truckId: dpType === 'DRIVER_EXPENSE' ? dpTruck || undefined : undefined,
+            tripId: dpType === 'DRIVER_EXPENSE' ? dpTripId || undefined : undefined,
             type: dpType,
             amount: amt,
             description: dpDesc.trim(),
@@ -1889,6 +1923,26 @@
                       <input type="number" required min="1" value={dpAmt} onChange={(e) => setDpAmt(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono" />
                     </div>
                   </div>
+                  {dpType === 'DRIVER_EXPENSE' && (
+                    <div className="grid grid-cols-2 gap-3 bg-slate-950/40 p-2.5 rounded-lg border border-slate-800">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-300 mb-1">Truck (Master)</label>
+                        <select value={dpTruck} onChange={(e) => { setDpTruck(e.target.value); setDpTripId(''); }} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+                          <option value="">-- Select Truck (Optional) --</option>
+                          {trucks.map(t => <option key={t.id} value={t.id}>{t.registrationNumber} - {t.model}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-300 mb-1">Link to Specific Trip</label>
+                        <select value={dpTripId} onChange={(e) => setDpTripId(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+                          <option value="">-- General (Unlinked) --</option>
+                          {(trips || []).filter(t => !dpTruck || t.truckId === dpTruck).map(tr => (
+                            <option key={tr.id} value={tr.id}>{tr.date} | {tr.route} (Rent: {formatCurr(tr.totalRent)})</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
                   <div>
                     <label className="block text-xs font-semibold text-slate-300 mb-1">Description</label>
                     <input type="text" required value={dpDesc} onChange={(e) => setDpDesc(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white" />
@@ -2471,12 +2525,14 @@
 
     // --- TAB 4: DRIVER SALARY & EXPENDITURE LEDGER ---
     function DriverLedgerTab() {
-      const { drivers, filteredTrips, filteredDriverPayments, addDriverPayment, deleteTrip, deleteDriverPayment } = useFleet();
+      const { drivers, trucks, filteredTrips, filteredDriverPayments, addDriverPayment, deleteTrip, deleteDriverPayment } = useFleet();
       const [driverModal, setDriverModal] = useState(null);
       const [pType, setPType] = useState('SALARY_PAYOUT');
       const [pAmount, setPAmount] = useState('');
       const [pMethod, setPMethod] = useState('Cash');
       const [pDesc, setPDesc] = useState('');
+      const [pTruck, setPTruck] = useState('');
+      const [pTripId, setPTripId] = useState('');
       const [deepDiveDrvId, setDeepDiveDrvId] = useState(null);
       const [editTarget, setEditTarget] = useState(null);
       const [drvColFilters, setDrvColFilters] = useState({});
@@ -2509,11 +2565,14 @@
           });
         });
         deepDiveDrv.payments.forEach(p => {
+          const linkedTrk = p.truckId ? trucks.find(t => t.id === p.truckId)?.registrationNumber : null;
+          const trkInfo = linkedTrk ? ` • Truck: ${linkedTrk}` : '';
+          const tripInfo = p.tripId ? ' (Trip Linked)' : '';
           rows.push({
             id: p.id,
             date: p.date,
             type: p.type === 'SALARY_PAYOUT' ? 'Advance' : 'Expense Claim',
-            details: `${p.description} (${p.paymentMethod || 'Cash'})`,
+            details: `${p.description}${trkInfo}${tripInfo} (${p.paymentMethod || 'Cash'})`,
             earned: p.type === 'DRIVER_EXPENSE' ? Number(p.amount || 0) : 0,
             paidOut: p.type === 'SALARY_PAYOUT' ? Number(p.amount || 0) : 0,
             rawType: 'DRIVER_PAY',
@@ -2547,6 +2606,8 @@
         addDriverPayment({
           date: new Date().toISOString().split('T')[0],
           driverName: driverModal.name,
+          truckId: pType === 'DRIVER_EXPENSE' ? pTruck || undefined : undefined,
+          tripId: pType === 'DRIVER_EXPENSE' ? pTripId || undefined : undefined,
           type: pType,
           amount: amt,
           paymentMethod: pMethod,
@@ -2555,6 +2616,8 @@
         setDriverModal(null);
         setPAmount('');
         setPDesc('');
+        setPTruck('');
+        setPTripId('');
       };
 
       return (
@@ -2734,6 +2797,39 @@
                       </button>
                     </div>
                   </div>
+
+                  {pType === 'DRIVER_EXPENSE' && (
+                    <div className="space-y-3 bg-slate-950/40 p-3 rounded-xl border border-slate-800">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-300 mb-1">Truck (Master)</label>
+                        <select
+                          value={pTruck}
+                          onChange={(e) => { setPTruck(e.target.value); setPTripId(''); }}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-mono"
+                        >
+                          <option value="">-- Select Truck (Optional) --</option>
+                          {trucks.map(t => (
+                            <option key={t.id} value={t.id}>{t.registrationNumber} - {t.model}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-300 mb-1">Link to Specific Trip (Optional - Deducts from Trip Profit)</label>
+                        <select
+                          value={pTripId}
+                          onChange={(e) => setPTripId(e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
+                        >
+                          <option value="">-- General Truck Operating Expense (Unlinked) --</option>
+                          {(filteredTrips || []).filter(t => !pTruck || t.truckId === pTruck).map(tr => (
+                            <option key={tr.id} value={tr.id}>{tr.date} | {tr.route} (Rent: {formatCurr(tr.totalRent)})</option>
+                          ))}
+                        </select>
+                        <p className="text-[10px] text-slate-400 mt-1">Linking directly reduces this trip's net operating profit.</p>
+                      </div>
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-xs font-semibold text-slate-300 mb-1">Amount (₹)</label>
                     <input type="number" required min="1" value={pAmount} onChange={(e) => setPAmount(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-mono" />
@@ -3163,6 +3259,10 @@
       const [dpAmt, setDpAmt] = useState('');
       const [dpMethod, setDpMethod] = useState('Cash');
       const [dpDesc, setDpDesc] = useState('');
+      const [dpTruck, setDpTruck] = useState(trucks[0]?.id || '');
+      const [dpTripId, setDpTripId] = useState('');
+
+      const filteredTripsForDriverTruck = (trips || []).filter(t => t.truckId === dpTruck);
 
       const handleDriverSubmit = (e) => {
         e.preventDefault();
@@ -3170,9 +3270,18 @@
         if (!amt || amt <= 0) return alert('Enter valid amount');
         if (!dpDriver) return alert('Please select a driver from Master');
         if (!dpDesc.trim()) return alert('Enter description');
-        addDriverPayment({ date: dpDate, driverName: dpDriver, type: dpType, amount: amt, paymentMethod: dpMethod, description: dpDesc });
+        addDriverPayment({
+          date: dpDate,
+          driverName: dpDriver,
+          truckId: dpType === 'DRIVER_EXPENSE' ? dpTruck || undefined : undefined,
+          tripId: dpType === 'DRIVER_EXPENSE' ? dpTripId || undefined : undefined,
+          type: dpType,
+          amount: amt,
+          paymentMethod: dpMethod,
+          description: dpDesc
+        });
         notify(`Driver ${dpType === 'SALARY_PAYOUT' ? 'cash advance' : 'expense claim'} recorded`);
-        setDpAmt(''); setDpDesc('');
+        setDpAmt(''); setDpDesc(''); setDpTripId('');
       };
 
       return (
@@ -3422,6 +3531,42 @@
                   {drivers.length === 0 && <span className="text-[11px] text-amber-400 mt-1 block">Please add drivers in Masters first</span>}
                 </div>
               </div>
+
+              {dpType === 'DRIVER_EXPENSE' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-950/40 p-4 rounded-xl border border-slate-800">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Truck (Master) *</label>
+                    <select
+                      value={dpTruck}
+                      onChange={(e) => { setDpTruck(e.target.value); setDpTripId(''); }}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono"
+                    >
+                      {trucks.map(t => <option key={t.id} value={t.id}>{t.registrationNumber} - {t.model}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      Link to Specific Trip (Optional - Deducts from Trip Profit)
+                    </label>
+                    <select
+                      value={dpTripId}
+                      onChange={(e) => setDpTripId(e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white"
+                    >
+                      <option value="">-- General Truck Operating Expense (Unlinked) --</option>
+                      {filteredTripsForDriverTruck.map(tr => (
+                        <option key={tr.id} value={tr.id}>
+                          {tr.date} | {tr.route} (Rent: {formatCurr(tr.totalRent)})
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Shows trips registered for the selected truck. Linking directly reduces this trip's net operating profit.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">Amount (₹) *</label>
                 <input type="number" required min="1" placeholder="0.00" value={dpAmt} onChange={(e) => setDpAmt(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono" />
