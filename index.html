@@ -526,8 +526,14 @@
         const totalPayoutsMade = filteredDriverPayments.filter(p => p.type === 'SALARY_PAYOUT').reduce((s, p) => s + Number(p.amount || 0), 0);
         const netDriverPayable = (totalDriverCommissions + totalExpensesClaimed) - totalPayoutsMade;
 
-        const fleetProfit = totalRevenue - totalDirectExpenses - totalDriverCommissions;
+        // Fleet Net Profit calculation:
+        // Operational truck expenses only (excluding reimbursable expenses that client pays back)
+        const totalOperationalTruckExpenses = filteredExpenses.filter(e => !e.isReimbursable).reduce((s, e) => s + Number(e.amount || 0), 0);
+        const totalBrokerCommissions = filteredTrips.reduce((s, t) => s + Number(t.commissionAmount || 0), 0);
         const totalTdsDeducted = filteredTrips.reduce((s, t) => s + Number(t.tdsAmount || 0), 0);
+        
+        // Net Profit = Revenue - (Operational Truck Expenses + Driver Claims + Driver Wages + Broker Commissions + TDS)
+        const fleetProfit = totalRevenue - totalOperationalTruckExpenses - totalExpensesClaimed - totalDriverCommissions - totalBrokerCommissions - totalTdsDeducted;
         const tripsWithTdsCount = filteredTrips.filter(t => t.isTdsDeducted && Number(t.tdsAmount) > 0).length;
 
         return {
@@ -753,7 +759,8 @@
         return found ? found.name : idOrName;
       };
       const getTripExpenses = (tripId) => {
-        return scopedExpenses.filter(e => e.tripId === tripId).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+        // Direct operational expenses only (excludes reimbursable expenses incurred on behalf of client)
+        return scopedExpenses.filter(e => e.tripId === tripId && !e.isReimbursable).reduce((sum, e) => sum + Number(e.amount || 0), 0);
       };
       const getTripReimbursable = (tripId) => {
         return scopedExpenses.filter(e => e.tripId === tripId && e.isReimbursable).reduce((sum, e) => sum + Number(e.amount || 0), 0);
@@ -774,8 +781,12 @@
         if (!tripOrId) return 0;
         const trip = typeof tripOrId === 'string' ? scopedTrips.find(t => t.id === tripOrId) : tripOrId;
         if (!trip) return 0;
-        const nonReimbursableExp = scopedExpenses.filter(e => e.tripId === trip.id && !e.isReimbursable).reduce((sum, e) => sum + Number(e.amount || 0), 0);
-        return Number(trip.totalRent || 0) - Number(trip.commissionAmount || 0) - Number(trip.tdsAmount || 0) - Number(trip.driverCommission || 0) - nonReimbursableExp;
+        const directOperationalExp = getTripExpenses(trip.id);
+        const comm = Number(trip.commissionAmount || 0);
+        const tds = Number(trip.tdsAmount || 0);
+        const drvSal = Number(trip.driverCommission || 0);
+        // Trip Profit = Gross Rent - (Direct Operational Expenses + Driver Salary + Broker Commission + TDS)
+        return Number(trip.totalRent || 0) - (directOperationalExp + drvSal + comm + tds);
       };
 
       // Automated Email Parsing Engine for Toll & Fuel Debits
@@ -1194,12 +1205,18 @@
 
       const truckData = trucks.map(trk => {
         const trkTrips = filteredTrips.filter(t => t.truckId === trk.id);
-        const trkExpenses = filteredExpenses.filter(e => e.truckId === trk.id);
+        // Exclude reimbursable expenses from vehicle operating costs
+        const trkDirectExpenses = filteredExpenses.filter(e => e.truckId === trk.id && !e.isReimbursable).reduce((s, e) => s + Number(e.amount), 0);
+        const trkDriverWages = trkTrips.reduce((s, t) => s + Number(t.driverCommission || 0), 0);
+        const trkCommissions = trkTrips.reduce((s, t) => s + Number(t.commissionAmount || 0), 0);
+        const trkTds = trkTrips.reduce((s, t) => s + Number(t.tdsAmount || 0), 0);
+        
         const rev = trkTrips.reduce((s, t) => s + Number(t.totalRent), 0);
-        const exp = trkExpenses.reduce((s, e) => s + Number(e.amount), 0);
+        // Total vehicle operating costs = direct operational expenses + driver salaries + broker commissions + TDS
+        const exp = trkDirectExpenses + trkDriverWages + trkCommissions + trkTds;
         const profit = rev - exp;
         const margin = rev > 0 ? (profit / rev) * 100 : 0;
-        return { trk, trips: trkTrips, expenses: trkExpenses, rev, exp, profit, margin };
+        return { trk, trips: trkTrips, expenses: filteredExpenses.filter(e => e.truckId === trk.id), rev, exp, profit, margin };
       });
 
       // Filtered truckData based on fleetFilters
@@ -1315,9 +1332,9 @@
                 <div className="text-[10px] text-slate-500 mt-0.5">{activeView.trips.length} trips</div>
               </div>
               <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-4">
-                <span className="text-xs text-slate-400 uppercase">Direct Operating Costs</span>
+                <span className="text-xs text-slate-400 uppercase">Total Operating Costs</span>
                 <div className="text-xl font-bold font-mono text-rose-400 mt-1">{formatCurr(activeView.exp)}</div>
-                <div className="text-[10px] text-slate-500 mt-0.5">Fuel, repairs, tolls</div>
+                <div className="text-[10px] text-slate-500 mt-0.5">Fuel, repairs, driver wages, TDS</div>
               </div>
               <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-4">
                 <span className="text-xs text-slate-400 uppercase">Net Vehicle Profit</span>
@@ -1995,6 +2012,28 @@
             });
           }
         });
+        // Client Reimbursable Expenses (Paid on behalf of client, to be reimbursed)
+        (deepDiveCmp.trips || []).forEach(t => {
+          const tripExpList = (filteredExpenses || []).filter(e => e.tripId === t.id && e.isReimbursable);
+          tripExpList.forEach(e => {
+            const eAmt = Number(e.amount || 0);
+            if (eAmt > 0) {
+              rows.push({
+                id: `reimb-${e.id}`,
+                date: e.date || t.date || '-',
+                source: 'Reimbursable Expense',
+                details: `Truck: ${getTruckReg ? getTruckReg(e.truckId || t.truckId) : (e.truckId || t.truckId)} | Category: ${e.category} | ${e.notes || 'Incurred on behalf of client'}`,
+                method: e.paymentMethod || 'Paid on Client Behalf',
+                ref: `TRIP-${t.id ? t.id.slice(-6) : '-'}`,
+                amount: eAmt,
+                isReimbursableBill: true,
+                rawType: 'EXPENSE',
+                rawObj: e
+              });
+            }
+          });
+        });
+
         // Ledger Settlements / Receipts
         (deepDiveCmp.settlements || []).forEach(s => {
           const amt = Number(s.amount || 0);
@@ -2014,7 +2053,7 @@
         });
         // Sort newest date first
         return rows.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-      }, [deepDiveCmp, getTruckReg]);
+      }, [deepDiveCmp, filteredExpenses, getTruckReg]);
 
       // Filtered Payments Received
       const filteredDeepPayments = useMemo(() => {
@@ -2249,15 +2288,15 @@
                     </tfoot>
                   </table>
 
-                  {/* SEPARATE PAYMENTS RECEIVED TABLE */}
+                  {/* SEPARATE PAYMENTS & REIMBURSABLE EXPENSES TABLE */}
                   <div className="pt-6 mt-6 border-t border-slate-800 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
                         <h4 className="text-sm font-bold text-emerald-400 flex items-center gap-2">
-                          <span>💰 Itemized Payments Received from {deepDiveCmp.cmp.name}</span>
+                          <span>💰 Itemized Payments Received & Client Reimbursables — {deepDiveCmp.cmp.name}</span>
                           <span className="text-[11px] font-normal text-slate-400">({filteredDeepPayments.length} records)</span>
                         </h4>
-                        <p className="text-[11px] text-slate-400">Trip advances, trip payments received, and general settlement receipts with corresponding dates</p>
+                        <p className="text-[11px] text-slate-400">Track trip advances, receipts, and expenses incurred on client's behalf (to be reimbursed) with corresponding dates</p>
                       </div>
                       <div className="flex items-center gap-2">
                         <div className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center gap-3 text-xs font-mono">
@@ -2280,11 +2319,11 @@
                         <thead className="bg-slate-800/80 text-[10px] uppercase text-slate-400">
                           <tr>
                             <th className="p-2.5">Date</th>
-                            <th className="p-2.5">Payment Type</th>
+                            <th className="p-2.5">Transaction Type</th>
                             <th className="p-2.5">Associated Trip / Details</th>
                             <th className="p-2.5">Method</th>
                             <th className="p-2.5">Ref / UTR</th>
-                            <th className="p-2.5 text-right">Amount Received</th>
+                            <th className="p-2.5 text-right">Amount</th>
                             <th className="p-2.5 text-right">Remaining Due</th>
                             <th className="p-2.5 text-center">Action</th>
                           </tr>
@@ -2307,7 +2346,7 @@
                           {filteredDeepPayments.length === 0 ? (
                             <tr>
                               <td colSpan={8} className="p-4 text-center text-slate-500 italic">
-                                No payments recorded yet for this client.
+                                No payment receipts or reimbursable expenses recorded yet for this client.
                               </td>
                             </tr>
                           ) : (
@@ -2316,6 +2355,7 @@
                                 <td className="p-2.5 font-mono text-slate-400 whitespace-nowrap">{p.date}</td>
                                 <td className="p-2.5 font-bold whitespace-nowrap">
                                   <span className={`px-2 py-0.5 rounded text-[10px] ${
+                                    p.isReimbursableBill ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
                                     p.source === 'Trip Advance' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
                                     p.source === 'Trip Payment Received' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
                                     'bg-purple-500/10 text-purple-400 border border-purple-500/20'
@@ -2326,8 +2366,8 @@
                                 <td className="p-2.5 text-slate-300">{p.details}</td>
                                 <td className="p-2.5 text-slate-400 whitespace-nowrap">{p.method}</td>
                                 <td className="p-2.5 font-mono text-slate-400 whitespace-nowrap">{p.ref}</td>
-                                <td className="p-2.5 text-right font-mono text-emerald-400 font-bold whitespace-nowrap">
-                                  +{formatCurr(p.amount)}
+                                <td className={`p-2.5 text-right font-mono font-bold whitespace-nowrap ${p.isReimbursableBill ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                  {p.isReimbursableBill ? `+${formatCurr(p.amount)} (Bill)` : `+${formatCurr(p.amount)} (Rcvd)`}
                                 </td>
                                 <td className="p-2.5 text-right font-mono text-amber-400/90 whitespace-nowrap">
                                   {formatCurr(deepDiveCmp.balanceDue)}
@@ -2338,8 +2378,9 @@
                                       Edit
                                     </button>
                                     <button onClick={() => {
-                                      if (confirm(`Delete this payment receipt? Outstanding balances will recalculate.`)) {
+                                      if (confirm(`Delete this record? Outstanding balances will recalculate.`)) {
                                         if (p.rawType === 'SETTLEMENT') deleteSettlement(p.rawObj.id);
+                                        else if (p.rawType === 'EXPENSE') deleteTruckExpense(p.rawObj.id);
                                         else if (p.rawType === 'TRIP') {
                                           if (confirm(`Do you want to reset payment received to ₹0 for this trip?`)) {
                                             updateTrip(p.rawObj.id, { ...p.rawObj, receivedAmount: 0 });
@@ -2358,7 +2399,7 @@
                         <tfoot className="bg-slate-950 font-bold border-t-2 border-slate-700 text-white">
                           <tr>
                             <td colSpan={5} className="p-2.5 uppercase tracking-wider text-emerald-400 font-extrabold text-[11px]">
-                              Total Payments Received ({filteredDeepPayments.length} Records)
+                              Total Receipts & Reimbursable Records ({filteredDeepPayments.length} Records)
                             </td>
                             <td className="p-2.5 text-right font-mono text-emerald-400 font-extrabold text-sm">
                               +{formatCurr(deepTotalPaymentsReceived)}
