@@ -13,6 +13,8 @@
       --muted: #9ca3af;
       --primary: #3b82f6;
       --accent: #10b981;
+      --amber: #f59e0b;
+      --rose: #f43f5e;
     }
     * {
       box-sizing: border-box;
@@ -27,7 +29,7 @@
       padding: 2rem 1rem;
     }
     .container {
-      max-width: 800px;
+      max-width: 820px;
       margin: 0 auto;
       background: var(--card-bg);
       border: 1px solid var(--border);
@@ -94,6 +96,18 @@
       color: #a7f3d0;
       font-size: 0.95rem;
     }
+    .callout-amber {
+      background: rgba(245, 158, 11, 0.1);
+      border-left: 4px solid var(--amber);
+      padding: 1rem 1.25rem;
+      border-radius: 0 8px 8px 0;
+      margin: 1.5rem 0;
+    }
+    .callout-amber p {
+      margin: 0;
+      color: #fde68a;
+      font-size: 0.95rem;
+    }
     a {
       color: var(--primary);
       text-decoration: none;
@@ -109,6 +123,19 @@
       color: var(--muted);
       font-size: 0.85rem;
     }
+    .contact-box {
+      background: #0d1322;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin-top: 1rem;
+    }
+    .contact-box p {
+      margin-bottom: 0.5rem;
+    }
+    .contact-box p:last-child {
+      margin-bottom: 0;
+    }
   </style>
 </head>
 <body>
@@ -116,30 +143,37 @@
     <div class="header">
       <span class="badge">Privacy Policy</span>
       <h1>AR FleetTrack</h1>
-      <p class="updated">Last Updated: October 14, 2026</p>
+      <p class="updated">Last Updated: October 15, 2026</p>
     </div>
 
     <h2>1. Introduction</h2>
     <p>
-      AR FleetTrack ("we", "our", or "the application") is a logistics management platform designed to help fleet owners track trips, company freight receivables, driver payables, vehicle performance, and operating expenses. This Privacy Policy details our practices concerning data collection, usage, and user privacy.
+      AR FleetTrack ("we", "our", or "the application") is a logistics management platform engineered to assist fleet owners and operators in tracking trips, freight receivables, driver payables and roadside claims, vehicle operating expenses, and overall fleet profitability. This Privacy Policy details our practices concerning data collection, database storage, usage, security, and your user rights under applicable data protection laws.
     </p>
 
     <h2>2. Information We Collect</h2>
     <p>
-      AR FleetTrack is engineered with privacy as a fundamental priority:
+      AR FleetTrack collects and processes only the information necessary to provide logistics management, accounting, and operational reporting:
     </p>
     <ul>
-      <li><strong>Operational Fleet Data:</strong> Trip logs, truck registration numbers, client billing amounts, driver wage records, and fuel receipts entered into the application. This data is stored locally in your browser's persistent storage (IndexedDB/LocalStorage) and remains on your device.</li>
-      <li><strong>Google User Data (Optional Integration):</strong> If you choose to enable automated expense synchronization with Google, the app connects using Google OAuth 2.0 to access your Gmail messages.</li>
+      <li>
+        <strong>Operational Fleet Data:</strong> Trip records, route information, vehicle registrations, contracted freight rents, TDS deductions, client company receivables, driver salary payouts, roadside expense claims, reimbursable expenses, and operating expense receipts (fuel, toll, maintenance). This data is securely stored and managed in our application's protected database systems to ensure persistent availability, integrity, and reliable multi-device access for your operations.
+      </li>
+      <li>
+        <strong>User Account & Profile Details:</strong> User credentials, profile configurations, and entity master records (trucks, drivers, and client companies) entered to organize and partition your fleet accounting.
+      </li>
+      <li>
+        <strong>Google User Data (Optional Integration):</strong> If you choose to enable automated expense synchronization with Google, AR FleetTrack connects via Google OAuth 2.0 to access your Gmail inbox in strictly read-only mode (<code>https://www.googleapis.com/auth/gmail.readonly</code>).
+      </li>
     </ul>
 
     <h2>3. How We Use Google User Data</h2>
     <p>
-      When you connect your Google Account, AR FleetTrack requests the <code>https://www.googleapis.com/auth/gmail.readonly</code> scope. We use this access exclusively for the following purpose:
+      When you enable Google integration, AR FleetTrack uses read-only access exclusively for:
     </p>
     <ul>
-      <li>Scanning incoming emails strictly to extract logistical expenses (such as toll passes, FASTag deductions, fuel purchases, repair invoices, and maintenance receipts).</li>
-      <li>Tagging and organizing these extracted expenses against your active fleet vehicles in your private dashboard.</li>
+      <li>Scanning incoming transaction alerts strictly to detect logistical operational debits (such as FASTag toll alerts, fleet card fuel purchase notifications, and maintenance receipts).</li>
+      <li>Extracting transaction amounts and dates, and automatically tagging them to the matching vehicle in your fleet dashboard.</li>
     </ul>
 
     <div class="callout">
@@ -148,22 +182,36 @@
       </p>
     </div>
 
-    <h2>4. Data Retention, Security & Sharing</h2>
+    <h2>4. Data Storage, Security & Sharing</h2>
     <ul>
-      <li><strong>No Data Selling or Advertising:</strong> We do not sell, rent, or trade your personal data, logistical operational data, or email content to third parties or data brokers. Your data is never used for advertising purposes.</li>
-      <li><strong>No Server-Side Storing of Email Contents:</strong> Email scanning and receipt parsing execute entirely client-side in your secure browser session. Your email credentials and tokens are stored solely in your local browser and are never sent to external third-party tracking servers.</li>
-      <li><strong>Local Data Control:</strong> You can export, back up, or completely wipe all your stored records and credentials at any time from the application's Settings tab.</li>
+      <li><strong>No Data Selling or Advertising:</strong> We do not sell, rent, monetize, or trade your personal data, logistics operational records, or email contents to third parties, advertising networks, or data brokers under any circumstances.</li>
+      <li><strong>Database Security:</strong> All data stored in our database systems is protected using industry-standard security protocols, encryption in transit (HTTPS/TLS), and secure access controls to guard your confidential commercial records against unauthorized access.</li>
+      <li><strong>No Third-Party Ad Tracking:</strong> We do not deploy third-party advertising cookies, behavioural trackers, or data-broker analytics inside the application.</li>
     </ul>
 
-    <h2>5. Revoking Permissions</h2>
+    <h2>5. User Rights & Data Erasure ("Right to be Forgotten")</h2>
     <p>
-      You can disconnect your Google account from AR FleetTrack at any time directly through the app interface by clicking <strong>Disconnect / Log Out</strong>, or directly through Google Account Security Settings at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">https://myaccount.google.com/permissions</a>.
+      We believe that fleet owners should always maintain complete ownership and sovereignty over their business data:
+    </p>
+    <ul>
+      <li><strong>Data Erasure / Blank Slate Reset:</strong> In compliance with the statutory Right to Erasure, AR FleetTrack provides a dedicated <strong>Clear Data (Privacy Reset)</strong> tool accessible in your Settings tab and dashboard footer.</li>
+      <li><strong>Permanent Deletion:</strong> You can permanently wipe your operational records (trips, operating expenses, driver claims, company settlements) or execute a full entity wipe to reset to a clean blank slate if you decide to discontinue using the application.</li>
+      <li><strong>Accidental Loss Prevention:</strong> All data erasure actions require explicit dual-confirmation through an interactive confirmation dialog (<em>"Are you sure you want to permanently delete?"</em>) to ensure your records are never cleared unintentionally.</li>
+    </ul>
+
+    <h2>6. Revoking Permissions</h2>
+    <p>
+      You can disconnect your Google account from AR FleetTrack at any time directly through the app interface in the Master Management tab, or directly via your Google Account Security Settings at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">https://myaccount.google.com/permissions</a>.
     </p>
 
-    <h2>6. Contact Us</h2>
+    <h2>7. Contact Administrator</h2>
     <p>
-      If you have questions, concerns, or requests regarding this Privacy Policy or how your data is handled, please contact the administrator via your registered support contact details.
+      If you have questions, concerns, feedback, or requests regarding this Privacy Policy or would like to exercise your data rights, please contact the administrator directly:
     </p>
+    <div class="contact-box">
+      <p><strong>Platform:</strong> AR FleetTrack</p>
+      <p><strong>Administrator Contact:</strong> <a href="mailto:atharshrangaraj00@gmail.com">atharshrangaraj00@gmail.com</a></p>
+    </div>
 
     <div class="footer">
       &copy; 2026 AR FleetTrack. All rights reserved. &bull; <a href="/">Return to Dashboard</a>
