@@ -2274,23 +2274,69 @@
           }
         });
 
-        // Compute running balance chronologically (oldest date first)
-        const sortedOldestFirst = [...rows].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+        // Build full chronological event stream to compute running due balance accurately across time
+        // Events:
+        // - TRIP_BILL: On t.date, adds net contracted freight (rent - comm - tds) to client account receivables
+        // - REIMB_BILL: On reimb.date, adds reimbursable expense bill to client account receivables
+        // - PAYMENT: Deducts advance, direct receipt, or account settlement from client account receivables
+        const timelineEvents = [];
 
-        // Initial billable net rent before any receipts or reimbursables
-        const baseNetRent = Math.max(0, deepDiveCmp.contracted - deepDiveCmp.commTotal - deepDiveCmp.tdsTotal);
-        let runningDue = baseNetRent;
-        sortedOldestFirst.forEach(r => {
-          if (r.isReimbursableBill) {
-            runningDue += r.amount;
-          } else {
-            runningDue = Math.max(0, runningDue - r.amount);
-          }
-          r.remainingDue = runningDue;
+        // 1. Add all trip billings (net contracted rent)
+        (deepDiveCmp.trips || []).forEach(t => {
+          const tNetRent = Math.max(0, Number(t.totalRent || 0) - Number(t.commissionAmount || 0) - Number(t.tdsAmount || 0));
+          timelineEvents.push({
+            date: t.date || '',
+            priority: 1, // Trip billing is booked first on its date
+            type: 'TRIP_BILL',
+            amount: tNetRent,
+            tripId: t.id
+          });
         });
 
-        // Sort newest date first for display
-        return sortedOldestFirst.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        // 2. Add all reimbursables and payments
+        rows.forEach(r => {
+          if (r.isReimbursableBill) {
+            timelineEvents.push({
+              date: r.date || '',
+              priority: 2, // Reimbursable expense added
+              type: 'REIMB_BILL',
+              amount: r.amount,
+              rowRef: r
+            });
+          } else {
+            timelineEvents.push({
+              date: r.date || '',
+              priority: 3, // Payment received (advance, direct receipt, settlement)
+              type: 'PAYMENT',
+              amount: r.amount,
+              rowRef: r
+            });
+          }
+        });
+
+        // Sort events chronologically:
+        // Earlier dates first; on the same date: priority 1 (TRIP_BILL) -> priority 2 (REIMB_BILL) -> priority 3 (PAYMENT)
+        timelineEvents.sort((a, b) => {
+          const dateComp = (a.date || '').localeCompare(b.date || '');
+          if (dateComp !== 0) return dateComp;
+          return (a.priority || 0) - (b.priority || 0);
+        });
+
+        // 3. Walk through chronological events and calculate running due balance
+        let currentRunningDue = 0;
+        timelineEvents.forEach(evt => {
+          if (evt.type === 'TRIP_BILL' || evt.type === 'REIMB_BILL') {
+            currentRunningDue += evt.amount;
+          } else if (evt.type === 'PAYMENT') {
+            currentRunningDue = Math.max(0, currentRunningDue - evt.amount);
+          }
+          if (evt.rowRef) {
+            evt.rowRef.remainingDue = currentRunningDue;
+          }
+        });
+
+        // 4. Return rows sorted newest date first for display
+        return rows.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
       }, [deepDiveCmp, filteredExpenses, getTruckReg, getTripBalancePending]);
 
       // Filtered Payments Received
