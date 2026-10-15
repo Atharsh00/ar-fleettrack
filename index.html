@@ -515,7 +515,9 @@
         const totalRevenue = filteredTrips.reduce((s, t) => s + Number(t.totalRent || 0), 0);
         const totalDirectExpenses = filteredExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
         const totalPendingRentFromTrips = filteredTrips.reduce((s, t) => {
-          const reimb = scopedExpenses.filter(e => e.tripId === t.id && e.isReimbursable).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+          const reimbExp = scopedExpenses.filter(e => e.tripId === t.id && e.isReimbursable).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+          const reimbDrv = scopedDriverPayments.filter(p => p.tripId === t.id && p.type === 'DRIVER_EXPENSE' && p.isReimbursable).reduce((sum, p) => sum + Number(p.amount || 0), 0);
+          const reimb = reimbExp + reimbDrv;
           return s + Math.max(0, Number(t.totalRent || 0) + reimb - Number(t.advanceReceived || 0) - Number(t.receivedAmount || 0) - Number(t.commissionAmount || 0) - Number(t.tdsAmount || 0));
         }, 0);
         const totalSettlementsInPeriod = filteredSettlements.reduce((s, st) => s + Number(st.amount || 0), 0);
@@ -529,11 +531,13 @@
         // Fleet Net Profit calculation:
         // Operational truck expenses only (excluding reimbursable expenses that client pays back)
         const totalOperationalTruckExpenses = filteredExpenses.filter(e => !e.isReimbursable).reduce((s, e) => s + Number(e.amount || 0), 0);
+        // Operational driver expense claims only (excluding reimbursable driver claims that client pays back)
+        const totalOperationalDriverExpenses = filteredDriverPayments.filter(p => p.type === 'DRIVER_EXPENSE' && !p.isReimbursable).reduce((s, p) => s + Number(p.amount || 0), 0);
         const totalBrokerCommissions = filteredTrips.reduce((s, t) => s + Number(t.commissionAmount || 0), 0);
         const totalTdsDeducted = filteredTrips.reduce((s, t) => s + Number(t.tdsAmount || 0), 0);
         
-        // Net Profit = Revenue - (Operational Truck Expenses + Driver Claims + Driver Wages + Broker Commissions + TDS)
-        const fleetProfit = totalRevenue - totalOperationalTruckExpenses - totalExpensesClaimed - totalDriverCommissions - totalBrokerCommissions - totalTdsDeducted;
+        // Net Profit = Revenue - (Operational Truck Expenses + Operational Driver Claims + Driver Wages + Broker Commissions + TDS)
+        const fleetProfit = totalRevenue - totalOperationalTruckExpenses - totalOperationalDriverExpenses - totalDriverCommissions - totalBrokerCommissions - totalTdsDeducted;
         const tripsWithTdsCount = filteredTrips.filter(t => t.isTdsDeducted && Number(t.tdsAmount) > 0).length;
 
         return {
@@ -652,6 +656,7 @@
           truckId: input.truckId || undefined,
           tripId: input.tripId || undefined,
           type: input.type,
+          isReimbursable: Boolean(input.isReimbursable),
           amount: Number(input.amount) || 0,
           paymentMethod: input.paymentMethod,
           description: input.description,
@@ -761,13 +766,15 @@
         return found ? found.name : idOrName;
       };
       const getTripExpenses = (tripId) => {
-        // Direct operational truck expenses (excluding client reimbursable) + roadside driver expense claims linked to this trip
+        // Direct operational truck expenses (excluding client reimbursable) + roadside driver expense claims linked to this trip (excluding client reimbursable)
         const truckDirectExp = scopedExpenses.filter(e => e.tripId === tripId && !e.isReimbursable).reduce((sum, e) => sum + Number(e.amount || 0), 0);
-        const drvClaims = scopedDriverPayments.filter(p => p.tripId === tripId && p.type === 'DRIVER_EXPENSE').reduce((sum, p) => sum + Number(p.amount || 0), 0);
+        const drvClaims = scopedDriverPayments.filter(p => p.tripId === tripId && p.type === 'DRIVER_EXPENSE' && !p.isReimbursable).reduce((sum, p) => sum + Number(p.amount || 0), 0);
         return truckDirectExp + drvClaims;
       };
       const getTripReimbursable = (tripId) => {
-        return scopedExpenses.filter(e => e.tripId === tripId && e.isReimbursable).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+        const expReimb = scopedExpenses.filter(e => e.tripId === tripId && e.isReimbursable).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+        const drvReimb = scopedDriverPayments.filter(p => p.tripId === tripId && p.type === 'DRIVER_EXPENSE' && p.isReimbursable).reduce((sum, p) => sum + Number(p.amount || 0), 0);
+        return expReimb + drvReimb;
       };
       const getTripBalancePending = (tripOrId) => {
         if (!tripOrId) return 0;
@@ -1285,7 +1292,7 @@
         const trkTrips = filteredTrips.filter(t => t.truckId === trk.id);
         // Exclude reimbursable expenses from vehicle operating costs
         const trkDirectExpenses = filteredExpenses.filter(e => e.truckId === trk.id && !e.isReimbursable).reduce((s, e) => s + Number(e.amount), 0);
-        const trkDriverClaims = (filteredDriverPayments || []).filter(p => p.truckId === trk.id && p.type === 'DRIVER_EXPENSE').reduce((s, p) => s + Number(p.amount || 0), 0);
+        const trkDriverClaims = (filteredDriverPayments || []).filter(p => p.truckId === trk.id && p.type === 'DRIVER_EXPENSE' && !p.isReimbursable).reduce((s, p) => s + Number(p.amount || 0), 0);
         const trkDriverWages = trkTrips.reduce((s, t) => s + Number(t.driverCommission || 0), 0);
         const trkCommissions = trkTrips.reduce((s, t) => s + Number(t.commissionAmount || 0), 0);
         const trkTds = trkTrips.reduce((s, t) => s + Number(t.tdsAmount || 0), 0);
@@ -1341,7 +1348,7 @@
             notes: `${p.driverName}: ${p.description || 'Roadside Claim'}`,
             paymentMethod: p.paymentMethod || 'Driver Claim',
             amount: p.amount,
-            isReimbursable: false,
+            isReimbursable: Boolean(p.isReimbursable),
             itemType: 'DRIVER_CLAIM',
             rawObj: p
           }));
@@ -1778,6 +1785,7 @@
       const [dpDesc, setDpDesc] = useState(target.data.description || '');
       const [dpTruck, setDpTruck] = useState(target.data.truckId || '');
       const [dpTripId, setDpTripId] = useState(target.data.tripId || '');
+      const [dpReimbursable, setDpReimbursable] = useState(Boolean(target.data.isReimbursable));
       const [showAllEditTripsDrv, setShowAllEditTripsDrv] = useState(false);
 
       const baseDriverTrips = (showAllEditTripsDrv ? (trips || []) : (filteredTrips || [])).filter(t => !dpTruck || t.truckId === dpTruck);
@@ -1840,6 +1848,7 @@
             type: dpType,
             amount: amt,
             description: dpDesc.trim(),
+            isReimbursable: dpType === 'DRIVER_EXPENSE' ? dpReimbursable : false,
           });
         } else if (target.type === 'SETTLEMENT' || target.type === 'COMPANY_SETTLEMENT') {
           const amt = parseFloat(setAmt);
@@ -2092,6 +2101,20 @@
                       </div>
                     </div>
                   )}
+                  {dpType === 'DRIVER_EXPENSE' && (
+                    <div className="flex items-center gap-2 p-2.5 bg-slate-800/60 border border-slate-700 rounded-lg">
+                      <input
+                        type="checkbox"
+                        id="editDpReimbursable"
+                        checked={dpReimbursable}
+                        onChange={(e) => setDpReimbursable(e.target.checked)}
+                        className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 bg-slate-700 border-slate-600"
+                      />
+                      <label htmlFor="editDpReimbursable" className="text-xs text-slate-300 font-medium cursor-pointer">
+                        Reimbursable by Company (Excluded from Vehicle Cost, Added to Client Due & Driver Ledger)
+                      </label>
+                    </div>
+                  )}
                   <div>
                     <label className="block text-xs font-semibold text-slate-300 mb-1">Description</label>
                     <input type="text" required value={dpDesc} onChange={(e) => setDpDesc(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white" />
@@ -2153,12 +2176,14 @@
         companies,
         filteredTrips,
         filteredExpenses,
+        filteredDriverPayments,
         filteredSettlements,
         addSettlement,
         updateTrip,
         deleteTrip,
         deleteSettlement,
         deleteTruckExpense,
+        deleteDriverPayment,
         getTruckReg,
         getTripReimbursable,
         getTripBalancePending,
@@ -2254,6 +2279,27 @@
               });
             }
           });
+          // Client Reimbursable Driver Claims (incurred by driver on behalf of client)
+          const driverClaimsReimbList = (filteredDriverPayments || []).filter(p => p.tripId === t.id && p.type === 'DRIVER_EXPENSE' && p.isReimbursable);
+          driverClaimsReimbList.forEach(p => {
+            const pAmt = Number(p.amount || 0);
+            if (pAmt > 0) {
+              const trBal = getTripBalancePending ? getTripBalancePending(t) : t.balancePending;
+              rows.push({
+                id: `reimb-dp-${p.id}`,
+                date: p.date || t.date || '-',
+                source: 'Reimbursable Driver Claim',
+                details: `Truck: ${getTruckReg ? getTruckReg(p.truckId || t.truckId) : (p.truckId || t.truckId)} | Driver: ${p.driverName} | ${p.description || 'Roadside claim incurred on behalf of client'}`,
+                method: p.paymentMethod || 'Paid on Client Behalf',
+                ref: `TRIP-${t.id ? t.id.slice(-6) : '-'}`,
+                amount: pAmt,
+                isReimbursableBill: true,
+                rawType: 'DRIVER_PAYMENT',
+                rawObj: p,
+                tripBal: trBal
+              });
+            }
+          });
         });
 
         // Ledger Settlements / Receipts
@@ -2275,10 +2321,12 @@
         });
 
         // Build full chronological event stream to compute running due balance accurately across time
-        // Events:
-        // - TRIP_BILL: On t.date, adds net contracted freight (rent - comm - tds) to client account receivables
-        // - REIMB_BILL: On reimb.date, adds reimbursable expense bill to client account receivables
-        // - PAYMENT: Deducts advance, direct receipt, or account settlement from client account receivables
+        // Events on the same date:
+        // Priority 10: TRIP_BILL (adds net contracted freight)
+        // Priority 20: REIMB_BILL (adds reimbursable truck expenses & driver claims)
+        // Priority 30: ADVANCE (deducts advance received)
+        // Priority 40: DIRECT_RECEIPT (deducts direct trip payment received)
+        // Priority 50: SETTLEMENT (deducts account settlement received)
         const timelineEvents = [];
 
         // 1. Add all trip billings (net contracted rent)
@@ -2286,7 +2334,7 @@
           const tNetRent = Math.max(0, Number(t.totalRent || 0) - Number(t.commissionAmount || 0) - Number(t.tdsAmount || 0));
           timelineEvents.push({
             date: t.date || '',
-            priority: 1, // Trip billing is booked first on its date
+            priority: 10,
             type: 'TRIP_BILL',
             amount: tNetRent,
             tripId: t.id
@@ -2295,27 +2343,27 @@
 
         // 2. Add all reimbursables and payments
         rows.forEach(r => {
+          let priority = 30;
           if (r.isReimbursableBill) {
-            timelineEvents.push({
-              date: r.date || '',
-              priority: 2, // Reimbursable expense added
-              type: 'REIMB_BILL',
-              amount: r.amount,
-              rowRef: r
-            });
-          } else {
-            timelineEvents.push({
-              date: r.date || '',
-              priority: 3, // Payment received (advance, direct receipt, settlement)
-              type: 'PAYMENT',
-              amount: r.amount,
-              rowRef: r
-            });
+            priority = 20;
+          } else if (r.source === 'Trip Advance') {
+            priority = 30;
+          } else if (r.source === 'Trip Payment Received') {
+            priority = 40;
+          } else if (r.source === 'Account Settlement') {
+            priority = 50;
           }
+
+          timelineEvents.push({
+            date: r.date || '',
+            priority,
+            type: r.isReimbursableBill ? 'REIMB_BILL' : 'PAYMENT',
+            amount: r.amount,
+            rowRef: r
+          });
         });
 
-        // Sort events chronologically:
-        // Earlier dates first; on the same date: priority 1 (TRIP_BILL) -> priority 2 (REIMB_BILL) -> priority 3 (PAYMENT)
+        // Sort events chronologically (oldest first):
         timelineEvents.sort((a, b) => {
           const dateComp = (a.date || '').localeCompare(b.date || '');
           if (dateComp !== 0) return dateComp;
@@ -2324,7 +2372,7 @@
 
         // 3. Walk through chronological events and calculate running due balance
         let currentRunningDue = 0;
-        timelineEvents.forEach(evt => {
+        timelineEvents.forEach((evt, idx) => {
           if (evt.type === 'TRIP_BILL' || evt.type === 'REIMB_BILL') {
             currentRunningDue += evt.amount;
           } else if (evt.type === 'PAYMENT') {
@@ -2332,12 +2380,17 @@
           }
           if (evt.rowRef) {
             evt.rowRef.remainingDue = currentRunningDue;
+            evt.rowRef.seqOrder = idx; // preserves exact forward timeline sequence
           }
         });
 
-        // 4. Return rows sorted newest date first for display
-        return rows.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-      }, [deepDiveCmp, filteredExpenses, getTruckReg, getTripBalancePending]);
+        // 4. Return rows sorted newest date first for display (latest events on a given date at top)
+        return rows.sort((a, b) => {
+          const dateComp = (b.date || '').localeCompare(a.date || '');
+          if (dateComp !== 0) return dateComp;
+          return (b.seqOrder || 0) - (a.seqOrder || 0);
+        });
+      }, [deepDiveCmp, filteredExpenses, filteredDriverPayments, getTruckReg, getTripBalancePending]);
 
       // Filtered Payments Received
       const filteredDeepPayments = useMemo(() => {
@@ -2653,13 +2706,8 @@
                                 <td className={`p-2.5 text-right font-mono font-bold whitespace-nowrap ${p.isReimbursableBill ? 'text-amber-400' : 'text-emerald-400'}`}>
                                   {p.isReimbursableBill ? `+${formatCurr(p.amount)} (Bill)` : `+${formatCurr(p.amount)} (Rcvd)`}
                                 </td>
-                                <td className="p-2.5 text-right font-mono whitespace-nowrap">
-                                  <div className="text-amber-400 font-bold">{formatCurr(p.remainingDue !== undefined ? p.remainingDue : deepDiveCmp.balanceDue)}</div>
-                                  {p.tripBal !== undefined && (
-                                    <div className="text-[10px] text-slate-400 font-normal" title="Pending balance on this specific trip">
-                                      Trip Bal: {formatCurr(p.tripBal)}
-                                    </div>
-                                  )}
+                                <td className="p-2.5 text-right font-mono font-bold text-amber-400 whitespace-nowrap">
+                                  {formatCurr(p.remainingDue !== undefined ? p.remainingDue : deepDiveCmp.balanceDue)}
                                 </td>
                                 <td className="p-2.5 text-center whitespace-nowrap">
                                   <div className="flex items-center justify-center gap-2">
@@ -2670,6 +2718,7 @@
                                       if (confirm(`Delete this record? Outstanding balances will recalculate.`)) {
                                         if (p.rawType === 'SETTLEMENT') deleteSettlement(p.rawObj.id);
                                         else if (p.rawType === 'EXPENSE') deleteTruckExpense(p.rawObj.id);
+                                        else if (p.rawType === 'DRIVER_PAYMENT') deleteDriverPayment(p.rawObj.id);
                                         else if (p.rawType === 'TRIP') {
                                           if (confirm(`Do you want to reset payment received to ₹0 for this trip?`)) {
                                             updateTrip(p.rawObj.id, { ...p.rawObj, receivedAmount: 0 });
@@ -3422,7 +3471,6 @@
       const [tComm, setTComm] = useState('0');
       const [isTds, setIsTds] = useState(true);
       const [tAdv, setTAdv] = useState('');
-      const [tRec, setTRec] = useState('');
       const [tNotes, setTNotes] = useState('');
 
       const handleAddDrop = () => setDrops([...drops, '']);
@@ -3432,13 +3480,12 @@
       const grossNum = parseFloat(tRent) || 0;
       const commNum = parseFloat(tComm) || 0;
       const advNum = parseFloat(tAdv) || 0;
-      const recNum = parseFloat(tRec) || 0;
       const defaultTdsRate = (activeRules && activeRules.defaultTdsPercent !== undefined) ? activeRules.defaultTdsPercent : 1;
       const defaultDrvRate = (activeRules && activeRules.defaultDriverSalaryPercent !== undefined) ? activeRules.defaultDriverSalaryPercent : 15;
       const tdsAmt = isTds ? (grossNum * (defaultTdsRate / 100)) : 0;
       const netRent = Math.max(0, grossNum - tdsAmt - commNum);
       const driver15 = netRent * (defaultDrvRate / 100);
-      const balancePending = Math.max(0, grossNum - advNum - recNum - commNum - tdsAmt);
+      const balancePending = Math.max(0, grossNum - advNum - commNum - tdsAmt);
 
       const handleTripSubmit = (e) => {
         e.preventDefault();
@@ -3450,11 +3497,11 @@
         addTrip({
           date: tDate, truckId: tTruck, companyName: tComp, driverName: tDriver,
           fromLocation: fromLoc, toLocation: toLoc, additionalDrops: drops.filter(Boolean),
-          totalRent: grossNum, commissionAmount: commNum, isTdsDeducted: isTds, advanceReceived: advNum, receivedAmount: recNum, notes: tNotes
+          totalRent: grossNum, commissionAmount: commNum, isTdsDeducted: isTds, advanceReceived: advNum, receivedAmount: 0, notes: tNotes
         });
 
         notify(`Trip saved! Net Rent: ${formatCurr(netRent)}, 15% Driver Salary: ${formatCurr(driver15)}, Company Balance Due: ${formatCurr(balancePending)}`);
-        setTRent(''); setTComm('0'); setTAdv(''); setTRec(''); setFromLoc(''); setToLoc(''); setDrops([]); setTNotes('');
+        setTRent(''); setTComm('0'); setTAdv(''); setFromLoc(''); setToLoc(''); setDrops([]); setTNotes('');
       };
 
       // Expense
@@ -3505,6 +3552,7 @@
       const [dpDesc, setDpDesc] = useState('');
       const [dpTruck, setDpTruck] = useState(trucks[0]?.id || '');
       const [dpTripId, setDpTripId] = useState('');
+      const [dpReimbursable, setDpReimbursable] = useState(false);
       const [showAllTripsDriver, setShowAllTripsDriver] = useState(false);
 
       const filteredTripsForDriverTruck = (showAllTripsDriver ? (trips || []) : (filteredTrips || [])).filter(t => t.truckId === dpTruck);
@@ -3521,12 +3569,13 @@
           truckId: dpType === 'DRIVER_EXPENSE' ? dpTruck || undefined : undefined,
           tripId: dpType === 'DRIVER_EXPENSE' ? dpTripId || undefined : undefined,
           type: dpType,
+          isReimbursable: dpType === 'DRIVER_EXPENSE' ? dpReimbursable : false,
           amount: amt,
           paymentMethod: dpMethod,
           description: dpDesc
         });
-        notify(`Driver ${dpType === 'SALARY_PAYOUT' ? 'cash advance' : 'expense claim'} recorded`);
-        setDpAmt(''); setDpDesc(''); setDpTripId('');
+        notify(`Driver ${dpType === 'SALARY_PAYOUT' ? 'cash advance' : (dpReimbursable ? 'reimbursable expense claim' : 'expense claim')} recorded`);
+        setDpAmt(''); setDpDesc(''); setDpTripId(''); setDpReimbursable(false);
       };
 
       return (
@@ -3609,7 +3658,7 @@
                 ))}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Agreed Gross Rent (₹) *</label>
                   <input type="number" required min="1" placeholder="50000" value={tRent} onChange={(e) => setTRent(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono font-bold" />
@@ -3621,10 +3670,6 @@
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Advance Received (₹)</label>
                   <input type="number" min="0" placeholder="20000" value={tAdv} onChange={(e) => setTAdv(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-emerald-300 mb-1">Amount Received from Company (₹)</label>
-                  <input type="number" min="0" placeholder="0" value={tRec} onChange={(e) => setTRec(e.target.value)} className="w-full bg-slate-800 border border-emerald-500/40 focus:border-emerald-400 rounded-xl px-3 py-2 text-sm text-white font-mono" title="Subsequent payments received from company for this trip" />
                 </div>
               </div>
 
@@ -3646,7 +3691,7 @@
                   <div className="text-base font-bold font-mono text-purple-300 mt-0.5">{formatCurr(driver15)}</div>
                 </div>
                 <div className="bg-amber-500/10 border border-amber-500/20 p-2.5 rounded-lg">
-                  <span className="text-[10px] uppercase font-bold text-amber-300">Company Due (Gross - Adv - Recvd - Comm - TDS)</span>
+                  <span className="text-[10px] uppercase font-bold text-amber-300">Company Due (Gross - Adv - Comm - TDS)</span>
                   <div className="text-base font-bold font-mono text-amber-400 mt-0.5">{formatCurr(balancePending)}</div>
                 </div>
                 <div className="bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-lg">
@@ -3836,6 +3881,21 @@
                     <p className="text-[11px] text-slate-400 mt-1">
                       Shows trips registered for the selected truck within the active view ({showAllTripsDriver ? 'All Time' : periodLabel}). Linking directly reduces this trip's net operating profit.
                     </p>
+                  </div>
+                  <div className="flex items-start gap-2 bg-slate-800/60 p-3 rounded-xl border border-slate-700">
+                    <input
+                      type="checkbox"
+                      id="dpReimbursable"
+                      checked={dpReimbursable}
+                      onChange={(e) => setDpReimbursable(e.target.checked)}
+                      className="rounded text-amber-500 mt-0.5"
+                    />
+                    <label htmlFor="dpReimbursable" className="text-xs text-white font-medium cursor-pointer">
+                      <span>Reimbursable by Company (Expense on behalf of client)</span>
+                      <span className="block text-[11px] text-slate-400 font-normal">
+                        Check this if the driver incurred this expense on behalf of the customer. It will be added to the customer's balance due in Company Receivables, credited to the driver in their Ledger, and will not reduce vehicle/trip operating profit.
+                      </span>
+                    </label>
                   </div>
                 </div>
               )}
