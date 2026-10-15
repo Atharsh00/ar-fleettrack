@@ -12,8 +12,8 @@ cd /d "C:\Users\athar\.gemini\antigravity\scratch\fleet-management"
 echo [1/3] Adding all files...
 git add -A
 
-echo [2/3] Committing updates: Remove Received/Pending columns, DD-MM-YYYY date formatting, and Privacy Data Erasure with safety confirmation...
-git commit -m "Feat: Remove Received and Pending from vehicle trips table, format dates to DD-MM-YYYY, and add Privacy Data Erasure with Are-You-Sure confirmation dialog"
+echo [2/3] Committing updates: Filter trip dropdowns by active date period (All Time, This Month, Last Month, Custom) with Show All toggle and email sync truck safety...
+git commit -m "Feat: Filter trip dropdowns by active date period (All Time, This Month, Last Month, Custom) with Show All toggle and email sync truck safety"
 
 echo [3/3] Pushing to GitHub main branch...
 git push -u origin main
@@ -21,7 +21,7 @@ git push -u origin main
 echo.
 echo ==============================================================================
 echo Done! Please check https://github.com/Atharsh00/ar-fleettrack
-echo The latest commit will show: "Feat: Remove Received and Pending from vehicle trips table, format dates to DD-MM-YYYY, and add Privacy Data Erasure with Are-You-Sure confirmation dialog"
+echo The latest commit will show: "Feat: Filter trip dropdowns by active date period (All Time, This Month, Last Month, Custom) with Show All toggle and email sync truck safety"
 echo ==============================================================================
 echo.
 pause
