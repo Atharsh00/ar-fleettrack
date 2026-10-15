@@ -12,8 +12,8 @@ cd /d "C:\Users\athar\.gemini\antigravity\scratch\fleet-management"
 echo [1/3] Adding all files...
 git add -A
 
-echo [2/3] Committing updates: Link Supabase Cloud Database with Offline/Demo Sandbox toggle and simulation data manager...
-git commit -m "Feat: Link Supabase Cloud Database with Offline/Demo Sandbox toggle and simulation data manager"
+echo [2/3] Committing updates: Fix JSX closing tag in MastersTab and enable CORS on CDN scripts...
+git commit -m "Fix: Add missing JSX closing tag in MastersTab and enable CORS on CDN scripts"
 
 echo [3/3] Pushing to GitHub main branch...
 git push -u origin main
@@ -21,7 +21,7 @@ git push -u origin main
 echo.
 echo ==============================================================================
 echo Done! Please check https://github.com/Atharsh00/ar-fleettrack
-echo The latest commit will show: "Feat: Link Supabase Cloud Database with Offline/Demo Sandbox toggle and simulation data manager"
+echo The latest commit will show: "Fix: Add missing JSX closing tag in MastersTab and enable CORS on CDN scripts"
 echo ==============================================================================
 echo.
 pause

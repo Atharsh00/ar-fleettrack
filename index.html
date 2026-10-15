@@ -14,11 +14,11 @@
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <!-- Babel Standalone for JSX -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@latest"></script>
+  <script crossorigin src="https://unpkg.com/lucide@latest"></script>
   <!-- Supabase JS Client v2 -->
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script crossorigin src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <!-- Google Identity Services (GIS) for 1-Click Gmail Connect -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
@@ -56,13 +56,18 @@
 
   <script>
     window.onerror = function(msg, url, line, col, error) {
+      console.error('Captured window error:', msg, url, line, col, error);
+      // Suppress cross-origin noise if an adblocker blocks external scripts like GIS
+      if (msg === 'Script error.' && (!url || url.includes('google') || url.includes('accounts.google.com'))) {
+        console.warn('Cross-origin script warning suppressed:', msg);
+        return;
+      }
       var banner = document.getElementById('error-banner');
       var errEl = document.getElementById('error-message');
       if (banner && errEl) {
         banner.style.display = 'block';
-        errEl.textContent = (error && error.stack) ? error.stack : (msg + ' at line ' + line + ':' + col);
+        errEl.textContent = (error && error.stack) ? error.stack : (msg + ' at ' + (url || 'script') + ':' + line + ':' + col);
       }
-      console.error('Captured window error:', msg, error);
     };
   </script>
 
@@ -5448,6 +5453,8 @@
                 </form>
               </div>
             </div>
+          )}
+
           {/* SUBTAB: CLOUD DATABASE & OFFLINE DEMO SANDBOX */}
           {subTab === 'cloud_db' && (
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6 animate-fadeIn">
