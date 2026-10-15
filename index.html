@@ -395,6 +395,7 @@
       const currency = '₹'; // Exclusively INR
 
       // --- STORAGE MODE: CLOUD (Supabase PostgreSQL) vs DEMO (Local Sandbox) ---
+      // For actual accounts, storageMode is permanently 'cloud'. For Demo sandbox, it is 'demo'.
       const [storageMode, setStorageMode] = useState(() => {
         try {
           return localStorage.getItem('fleet_storage_mode') || 'cloud';
@@ -444,11 +445,126 @@
       useEffect(() => { localStorage.setItem(`${STORAGE_KEY}_dp`, JSON.stringify(driverPayments)); }, [driverPayments]);
       useEffect(() => { localStorage.setItem(`${STORAGE_KEY}_settlements`, JSON.stringify(settlements)); }, [settlements]);
 
-      // Auth actions
+      // --- AUTH ACTIONS & DEMO SANDBOX ENGINE ---
+      const DEMO_USER = {
+        id: 'usr-demo',
+        username: 'demo',
+        businessName: 'Demo Logistics (Sandbox)',
+        email: 'demo@fleettrack.local',
+        isDemo: true
+      };
+
+      const loginDemo = () => {
+        const demoProfId = 'prof-demo';
+        const demoProf = {
+          id: demoProfId,
+          userId: DEMO_USER.id,
+          name: 'Demo Fleet Logistics (Sandbox)',
+          isDefault: true,
+          createdAt: new Date().toISOString().split('T')[0]
+        };
+
+        setProfiles(prev => prev.some(p => p.id === demoProfId) ? prev : [demoProf, ...prev]);
+        setRules(prev => ({
+          ...prev,
+          [demoProfId]: { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1 }
+        }));
+        setEmailSyncConfigs(prev => ({
+          ...prev,
+          [demoProfId]: { ...defaultEmailSyncConfig, linkedEmail: 'demo@fleettrack.local' }
+        }));
+
+        const demoTrucks = [
+          { id: 'trk-demo-1', profileId: demoProfId, registrationNumber: 'MH-12-RN-4825', model: 'Tata Signa 4825.TK', capacity: '28 Ton', isSimulation: true },
+          { id: 'trk-demo-2', profileId: demoProfId, registrationNumber: 'MH-14-GH-3518', model: 'BharatBenz 3528C', capacity: '22 Ton', isSimulation: true },
+          { id: 'trk-demo-3', profileId: demoProfId, registrationNumber: 'DL-01-AX-9012', model: 'Ashok Leyland 4220', capacity: '26 Ton', isSimulation: true },
+        ];
+        const demoCompanies = [
+          { id: 'cmp-demo-1', profileId: demoProfId, name: 'LogiXpress Logistics Ltd', contactPerson: 'Rajesh Sharma', phone: '+91 98220 11223', isSimulation: true },
+          { id: 'cmp-demo-2', profileId: demoProfId, name: 'Tata Steel Supply Chain', contactPerson: 'Vikram Verma', phone: '+91 98330 99887', isSimulation: true },
+        ];
+        const demoDrivers = [
+          { id: 'drv-demo-1', profileId: demoProfId, name: 'Ramesh Yadav', phone: '+91 97110 12345', licenseNumber: 'MH-12-201500892', status: 'ACTIVE', isSimulation: true },
+          { id: 'drv-demo-2', profileId: demoProfId, name: 'Sukhvinder Singh', phone: '+91 98220 54321', licenseNumber: 'PB-10-201200114', status: 'ACTIVE', isSimulation: true },
+        ];
+        const demoTrips = [
+          {
+            id: 'trp-demo-1',
+            profileId: demoProfId,
+            date: getRelDate(2),
+            truckId: 'trk-demo-1',
+            companyName: 'LogiXpress Logistics Ltd',
+            driverName: 'Ramesh Yadav',
+            fromLocation: 'Mumbai JNPT',
+            toLocation: 'Pune Chakan',
+            additionalDrops: [],
+            route: 'Mumbai JNPT -> Pune Chakan',
+            totalRent: 45000,
+            commissionAmount: 1500,
+            isTdsDeducted: true,
+            advanceReceived: 20000,
+            receivedAmount: 0,
+            tdsAmount: 450,
+            netRent: 43050,
+            driverCommission: 6457.5,
+            balancePending: 23050,
+            notes: 'Container auto chassis movement',
+            isSimulation: true
+          },
+          {
+            id: 'trp-demo-2',
+            profileId: demoProfId,
+            date: getRelDate(4),
+            truckId: 'trk-demo-2',
+            companyName: 'Tata Steel Supply Chain',
+            driverName: 'Sukhvinder Singh',
+            fromLocation: 'Jamshedpur Works',
+            toLocation: 'Kolkata Port',
+            additionalDrops: [],
+            route: 'Jamshedpur Works -> Kolkata Port',
+            totalRent: 68000,
+            commissionAmount: 2000,
+            isTdsDeducted: true,
+            advanceReceived: 35000,
+            receivedAmount: 0,
+            tdsAmount: 680,
+            netRent: 65320,
+            driverCommission: 9798,
+            balancePending: 30320,
+            notes: 'Coil transport rake clearance',
+            isSimulation: true
+          }
+        ];
+        const demoExpenses = [
+          { id: 'exp-demo-1', profileId: demoProfId, date: getRelDate(1), truckId: 'trk-demo-1', category: 'DIESEL', amount: 16500, paymentMethod: 'Fleet Card', notes: 'Diesel 180L IOCL Highway', isSimulation: true },
+          { id: 'exp-demo-2', profileId: demoProfId, date: getRelDate(3), truckId: 'trk-demo-1', category: 'TOLL', amount: 2800, paymentMethod: 'FASTag', notes: 'Expressway tolls', isSimulation: true },
+          { id: 'exp-demo-3', profileId: demoProfId, date: getRelDate(4), truckId: 'trk-demo-2', category: 'DIESEL', amount: 21000, paymentMethod: 'Fleet Card', notes: 'Diesel 240L BPCL', isSimulation: true },
+        ];
+        const demoPayments = [
+          { id: 'dp-demo-1', profileId: demoProfId, date: getRelDate(1), driverName: 'Ramesh Yadav', type: 'SALARY_PAYOUT', amount: 5000, paymentMethod: 'UPI', description: 'Weekly advance payout', isSimulation: true }
+        ];
+        const demoSettlements = [
+          { id: 'set-demo-1', profileId: demoProfId, date: getRelDate(1), companyName: 'LogiXpress Logistics Ltd', amount: 15000, paymentMethod: 'NEFT', referenceNumber: 'NEFT992211', notes: 'Part clearance of invoice', isSimulation: true }
+        ];
+
+        setTrucks(prev => prev.some(t => t.profileId === demoProfId) ? prev : [...demoTrucks, ...prev]);
+        setCompanies(prev => prev.some(c => c.profileId === demoProfId) ? prev : [...demoCompanies, ...prev]);
+        setDrivers(prev => prev.some(d => d.profileId === demoProfId) ? prev : [...demoDrivers, ...prev]);
+        setTrips(prev => prev.some(t => t.profileId === demoProfId) ? prev : [...demoTrips, ...prev]);
+        setExpenses(prev => prev.some(e => e.profileId === demoProfId) ? prev : [...demoExpenses, ...prev]);
+        setDriverPayments(prev => prev.some(p => p.profileId === demoProfId) ? prev : [...demoPayments, ...prev]);
+        setSettlements(prev => prev.some(s => s.profileId === demoProfId) ? prev : [...demoSettlements, ...prev]);
+
+        setStorageMode('demo');
+        setCurrentUser(DEMO_USER);
+        setActiveProfileId(demoProfId);
+      };
+
       const login = (username, password) => {
         const u = users.find(x => x.username.toLowerCase() === username.trim().toLowerCase() && x.password === password);
         if (!u) throw new Error('Invalid username or password');
-        setCurrentUser(u);
+        setStorageMode('cloud');
+        setCurrentUser({ ...u, isDemo: false });
         const userProfs = profiles.filter(p => p.userId === u.id || (!p.userId && p.name.toLowerCase() === u.businessName.toLowerCase()));
         if (userProfs.length > 0) {
           setActiveProfileId(userProfs[0].id);
@@ -468,15 +584,26 @@
         const newUserId = `usr-${Date.now()}`;
         const newProfId = `prof-${Date.now()}`;
         const newProf = { id: newProfId, userId: newUserId, name: businessName.trim(), isDefault: true, createdAt: new Date().toISOString().split('T')[0] };
-        const newUser = { id: newUserId, username: username.trim(), password, businessName: businessName.trim(), email: email.trim() };
+        const newUser = { id: newUserId, username: username.trim(), password, businessName: businessName.trim(), email: email.trim(), isDemo: false };
 
         setProfiles(prev => [...prev, newProf]);
         setRules(prev => ({ ...prev, [newProfId]: { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1 } }));
         setEmailSyncConfigs(prev => ({ ...prev, [newProfId]: { ...defaultEmailSyncConfig, linkedEmail: email.trim() } }));
         setUsers(prev => [...prev, newUser]);
 
+        setStorageMode('cloud');
         setCurrentUser(newUser);
         setActiveProfileId(newProfId);
+
+        if (supabaseClient) {
+          supabaseClient.from('profiles').upsert(toSnakeObj(newProf)).catch(e => console.warn('Cloud profile init error:', e));
+          supabaseClient.from('rules').upsert({
+            profile_id: newProfId,
+            default_driver_salary_percent: 15,
+            default_tds_percent: 1
+          }).catch(e => console.warn('Cloud rules init error:', e));
+        }
+
         return newUser;
       };
 
@@ -667,10 +794,10 @@
       };
 
       useEffect(() => {
-        if (storageMode === 'cloud' && supabaseClient && activeProfileId) {
+        if (currentUser && !currentUser.isDemo && supabaseClient && activeProfileId) {
           pullCloudData(activeProfileId);
         }
-      }, [storageMode, activeProfileId]);
+      }, [currentUser, activeProfileId]);
 
       // Push local data into Supabase Cloud
       const syncLocalToCloud = async () => {
@@ -1548,7 +1675,42 @@
       };
 
       // Data Erasure / Clear Data (Right to be Forgotten & Privacy Compliance)
-      const clearAllUserData = (wipeMasters = false, allProfiles = false) => {
+      const clearAllUserData = async (wipeMasters = false, allProfiles = false) => {
+        // Erase directly from Supabase Cloud Database for real production accounts
+        if (currentUser && !currentUser.isDemo && supabaseClient) {
+          try {
+            const targetProf = activeProfileId;
+            if (allProfiles) {
+              const scopedIds = scopedProfiles.map(p => p.id);
+              await Promise.all([
+                supabaseClient.from('trips').delete().in('profile_id', scopedIds),
+                supabaseClient.from('expenses').delete().in('profile_id', scopedIds),
+                supabaseClient.from('driver_payments').delete().in('profile_id', scopedIds),
+                supabaseClient.from('settlements').delete().in('profile_id', scopedIds),
+                ...(wipeMasters ? [
+                  supabaseClient.from('trucks').delete().in('profile_id', scopedIds),
+                  supabaseClient.from('companies').delete().in('profile_id', scopedIds),
+                  supabaseClient.from('drivers').delete().in('profile_id', scopedIds)
+                ] : [])
+              ]);
+            } else {
+              await Promise.all([
+                supabaseClient.from('trips').delete().eq('profile_id', targetProf),
+                supabaseClient.from('expenses').delete().eq('profile_id', targetProf),
+                supabaseClient.from('driver_payments').delete().eq('profile_id', targetProf),
+                supabaseClient.from('settlements').delete().eq('profile_id', targetProf),
+                ...(wipeMasters ? [
+                  supabaseClient.from('trucks').delete().eq('profile_id', targetProf),
+                  supabaseClient.from('companies').delete().eq('profile_id', targetProf),
+                  supabaseClient.from('drivers').delete().eq('profile_id', targetProf)
+                ] : [])
+              ]);
+            }
+          } catch (cloudErr) {
+            console.error('Error erasing data from Supabase Cloud:', cloudErr);
+          }
+        }
+
         if (allProfiles) {
           setTrips([]);
           setExpenses([]);
@@ -1601,7 +1763,7 @@
 
       return (
         <FleetContext.Provider value={{
-          currentUser, users, login, signup, logout, resetPassword, changePassword,
+          currentUser, users, login, signup, logout, loginDemo, resetPassword, changePassword,
           profiles: scopedProfiles, activeProfileId, activeProfile, setActiveProfileId, addProfile, updateProfile, deleteProfile,
           activeRules, updateRules,
           activeEmailConfig, updateEmailSyncConfig, syncExpensesFromEmails, syncFromLiveGmail,
@@ -4816,7 +4978,7 @@
                 { id: 'drivers', label: `Driver Master (${drivers.length})`, icon: '👨‍✈️' },
                 { id: 'rules', label: 'Rules & Formulas', icon: '⚙️' },
                 { id: 'email_sync', label: 'Email Expense Sync', icon: '✉️' },
-                { id: 'cloud_db', label: 'Cloud DB & Storage', icon: '☁️' },
+                { id: 'cloud_db', label: 'Cloud Database Status', icon: '☁️' },
                 { id: 'security', label: 'Account & Security', icon: '🔑' },
                 { id: 'data_erasure', label: 'Privacy & Data Erasure', icon: '🗑️' },
               ].map(st => (
@@ -5205,38 +5367,7 @@
                 )}
               </div>
 
-              {/* CARD 2: INSTANT SIMULATION & TEST MODE */}
-              <div className="bg-slate-800/40 border border-slate-800 rounded-2xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-base">🧪</span>
-                    <h4 className="text-xs font-black text-amber-400 uppercase tracking-wider">
-                      Instant Test Simulation (Zero Setup Required)
-                    </h4>
-                  </div>
-                  <p className="text-xs text-slate-300">
-                    Want to test the parser right away without waiting for bank alerts? Simulate receiving FASTag (₹650) and Fuel (₹18,200) debit emails for your active trucks.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    try {
-                      const res = syncExpensesFromEmails();
-                      setSyncStatusMsg({
-                        error: false,
-                        text: `🎉 Simulation Successful! Parsed ${res.syncedCount} alert emails and automatically tagged them to active trips in your ledger.`
-                      });
-                    } catch (err) {
-                      setSyncStatusMsg({ error: true, text: `⚠️ Simulation Error: ${err.message}` });
-                    }
-                  }}
-                  className="px-4 py-2.5 bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-amber-400 border border-amber-500/40 font-bold rounded-xl text-xs shadow-md whitespace-nowrap transition flex items-center gap-1.5"
-                >
-                  <span>▶️</span>
-                  <span>Simulate FASTag & Fuel Alerts</span>
-                </button>
-              </div>
+
 
               {/* CARD 3: KEYWORD FILTERS & TRIP TAGGING RULES */}
               <form onSubmit={(e) => {
@@ -5455,7 +5586,7 @@
             </div>
           )}
 
-          {/* SUBTAB: CLOUD DATABASE & OFFLINE DEMO SANDBOX */}
+          {/* SUBTAB: CLOUD DATABASE STATUS & SYNCHRONIZATION */}
           {subTab === 'cloud_db' && (
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6 animate-fadeIn">
               {/* Header Title */}
@@ -5463,20 +5594,16 @@
                 <div>
                   <h3 className="text-base font-bold text-white flex items-center gap-2">
                     <span className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400">☁️</span>
-                    Cloud Database & Offline Mode Settings
+                    Cloud Database & Synchronization
                   </h3>
                   <p className="text-xs text-slate-400 mt-1">
-                    Manage your PostgreSQL database in Supabase and toggle between Live Cloud DB and Offline Demo Sandbox.
+                    Your fleet operations are directly synchronized with your PostgreSQL database on Supabase in real time.
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className={`text-xs px-3 py-1 rounded-full border font-bold flex items-center gap-1.5 ${
-                    storageMode === 'cloud'
-                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                      : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                  }`}>
-                    <span className={`w-2 h-2 rounded-full ${storageMode === 'cloud' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
-                    <span>{storageMode === 'cloud' ? '🟢 Live Cloud DB' : '🟡 Offline Demo Sandbox'}</span>
+                  <span className="text-xs px-3 py-1 rounded-full border font-bold flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>🟢 Cloud Database Connected</span>
                   </span>
                 </div>
               </div>
@@ -5496,195 +5623,41 @@
                 </div>
               )}
 
-              {/* 1. Storage Mode Toggle Selector */}
-              <div>
-                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2.5">
-                  1. Active Storage & Operation Mode
-                </h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Option A: Live Cloud */}
-                  <div
-                    onClick={() => {
-                      setStorageMode('cloud');
-                      setDbActionStatus({ type: 'success', message: 'Switched to 🟢 Live Cloud Database (Supabase PostgreSQL).' });
-                    }}
-                    className={`p-4 rounded-2xl border cursor-pointer transition relative ${
-                      storageMode === 'cloud'
-                        ? 'bg-emerald-950/40 border-emerald-500 ring-1 ring-emerald-500/50 shadow-lg shadow-emerald-500/10'
-                        : 'bg-slate-950/50 border-slate-800 hover:border-slate-700 opacity-75'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg">☁️</span>
-                        <span className="text-sm font-bold text-white">Live Cloud Database</span>
-                      </div>
-                      {storageMode === 'cloud' && (
-                        <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded bg-emerald-500 text-slate-950">Active Mode</span>
-                      )}
-                    </div>
-                    <p className="text-xs text-slate-300 leading-relaxed mb-3">
-                      Entries are securely synced to your PostgreSQL database on Supabase (<code className="text-emerald-400 font-mono">vdmfymirrdkebnwlgnqz</code>). Changes are visible across all devices and team members.
-                    </p>
-                    <div className="text-[11px] font-semibold text-emerald-400 flex items-center gap-1.5">
-                      <span>✓ Multi-device persistent</span>
-                      <span className="text-slate-600">•</span>
-                      <span>✓ Row Level Security</span>
-                    </div>
-                  </div>
-
-                  {/* Option B: Offline Sandbox */}
-                  <div
-                    onClick={() => {
-                      setStorageMode('demo');
-                      setDbActionStatus({ type: 'success', message: 'Switched to 🟡 Offline Demo Sandbox (Local Mode).' });
-                    }}
-                    className={`p-4 rounded-2xl border cursor-pointer transition relative ${
-                      storageMode === 'demo'
-                        ? 'bg-amber-950/40 border-amber-500 ring-1 ring-amber-500/50 shadow-lg shadow-amber-500/10'
-                        : 'bg-slate-950/50 border-slate-800 hover:border-slate-700 opacity-75'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg">💻</span>
-                        <span className="text-sm font-bold text-white">Offline Demo Sandbox</span>
-                      </div>
-                      {storageMode === 'demo' && (
-                        <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded bg-amber-500 text-slate-950">Active Mode</span>
-                      )}
-                    </div>
-                    <p className="text-xs text-slate-300 leading-relaxed mb-3">
-                      Data is stored purely in browser local storage. No network calls are sent to your cloud database. Perfect for safe experimentation, training, and working completely offline.
-                    </p>
-                    <div className="text-[11px] font-semibold text-amber-400 flex items-center gap-1.5">
-                      <span>✓ Zero network dependency</span>
-                      <span className="text-slate-600">•</span>
-                      <span>✓ Cloud data isolated</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* 2. Cloud Database Connection Info */}
-              <div className="bg-slate-950/70 p-4 rounded-2xl border border-slate-800 space-y-3">
+              {/* Cloud Database Connection Info */}
+              <div className="bg-slate-950/70 p-5 rounded-2xl border border-slate-800 space-y-3">
                 <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                  2. Supabase Connection Credentials & Status
+                  PostgreSQL Connection Details
                 </h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                  <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
                     <span className="text-[10px] text-slate-400 font-bold uppercase">Project ID</span>
-                    <div className="font-mono text-emerald-400 font-bold mt-0.5">vdmfymirrdkebnwlgnqz</div>
+                    <div className="font-mono text-emerald-400 font-bold mt-1">vdmfymirrdkebnwlgnqz</div>
                   </div>
-                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                  <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
                     <span className="text-[10px] text-slate-400 font-bold uppercase">Cloud Endpoint</span>
-                    <div className="font-mono text-white truncate mt-0.5" title="https://vdmfymirrdkebnwlgnqz.supabase.co">https://vdmfymirrdkebnwlgnqz.supabase.co</div>
+                    <div className="font-mono text-white truncate mt-1" title="https://vdmfymirrdkebnwlgnqz.supabase.co">https://vdmfymirrdkebnwlgnqz.supabase.co</div>
                   </div>
-                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                  <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
                     <span className="text-[10px] text-slate-400 font-bold uppercase">Engine</span>
-                    <div className="text-slate-300 font-bold mt-0.5">PostgreSQL 15 (Supabase)</div>
+                    <div className="text-slate-300 font-bold mt-1">PostgreSQL 15 (Supabase)</div>
                   </div>
-                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase">Connection Status</span>
-                    <div className="text-emerald-400 font-bold mt-0.5 flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                      <span>Ready & Authenticated</span>
+                  <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase">Sync Status</span>
+                    <div className="text-emerald-400 font-bold mt-1 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                      <span>Live & Synchronized</span>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* 3. Demo / Simulation Data Sandbox Manager */}
-              <div className="bg-slate-950/60 p-5 rounded-2xl border border-slate-800 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                      <span>⚡</span> Demo / Simulation Fleet Data Sandbox
-                    </h4>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Generate realistic test trips, fuel expenses, and driver claims tagged as simulation. Wipe them anytime with 1 click without affecting real business data.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-300 font-bold font-mono">
-                      Simulation records: <strong className="text-amber-400">{simulationStats.totalSimCount}</strong>
-                    </span>
-                  </div>
-                </div>
-
-                {/* Simulation Breakdown Pills */}
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
-                  <div className="bg-slate-900/80 p-2 rounded-xl border border-slate-800">
-                    <div className="font-mono font-bold text-white">{simulationStats.simTripsCount}</div>
-                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Demo Trips</div>
-                  </div>
-                  <div className="bg-slate-900/80 p-2 rounded-xl border border-slate-800">
-                    <div className="font-mono font-bold text-white">{simulationStats.simTrucksCount}</div>
-                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Demo Trucks</div>
-                  </div>
-                  <div className="bg-slate-900/80 p-2 rounded-xl border border-slate-800">
-                    <div className="font-mono font-bold text-white">{simulationStats.simExpCount}</div>
-                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Demo Expenses</div>
-                  </div>
-                  <div className="bg-slate-900/80 p-2 rounded-xl border border-slate-800">
-                    <div className="font-mono font-bold text-white">{simulationStats.simDpCount}</div>
-                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Demo Claims</div>
-                  </div>
-                  <div className="bg-slate-900/80 p-2 rounded-xl border border-slate-800">
-                    <div className="font-mono font-bold text-white">{simulationStats.simSetCount}</div>
-                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Demo Settlements</div>
-                  </div>
-                </div>
-
-                {/* Simulation Action Buttons */}
-                <div className="flex flex-wrap items-center gap-3 pt-2">
-                  <button
-                    type="button"
-                    disabled={dbActionLoading}
-                    onClick={async () => {
-                      setDbActionLoading(true);
-                      setDbActionStatus(null);
-                      try {
-                        const res = await generateSimulationData();
-                        setDbActionStatus({
-                          type: 'success',
-                          message: `Generated realistic demo fleet data: ${res.tripsCount} trips, ${res.trucksCount} trucks, and ${res.expensesCount} expenses!`
-                        });
-                      } catch (err) {
-                        setDbActionStatus({ type: 'error', message: err.message || 'Failed to generate demo data.' });
-                      } finally {
-                        setDbActionLoading(false);
-                      }
-                    }}
-                    className="px-4 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs rounded-xl shadow-md transition flex items-center gap-2"
-                  >
-                    <span>⚡</span>
-                    <span>{dbActionLoading ? 'Generating...' : 'Generate Demo Fleet Data'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={dbActionLoading || simulationStats.totalSimCount === 0}
-                    onClick={() => setShowWipeSimModal(true)}
-                    className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
-                      simulationStats.totalSimCount > 0
-                        ? 'bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-700/60 shadow-md'
-                        : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed opacity-50'
-                    }`}
-                  >
-                    <span>🗑️</span>
-                    <span>Wipe Simulation Data Only ({simulationStats.totalSimCount})</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* 4. Data Migration & Sync Controls */}
+              {/* Cloud Migration & Refresh Tools */}
               <div className="bg-slate-950/60 p-5 rounded-2xl border border-slate-800 space-y-3">
                 <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                  3. Cloud Migration & Sync Tools
+                  Cloud Synchronization Tools
                 </h4>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Easily migrate your existing local records to the Supabase Cloud or pull the latest cloud state onto this device.
+                  All ledger additions and edits save automatically in real time. You can also force-push local cached entries to the cloud or refresh data from Supabase.
                 </p>
                 <div className="flex flex-wrap items-center gap-3 pt-2">
                   <button
@@ -5697,7 +5670,7 @@
                         await syncLocalToCloud();
                         setDbActionStatus({
                           type: 'success',
-                          message: `Successfully pushed all local fleet records to Supabase PostgreSQL database!`
+                          message: 'Successfully pushed all local fleet records to Supabase PostgreSQL database!'
                         });
                       } catch (err) {
                         setDbActionStatus({ type: 'error', message: err.message || 'Failed to push data to cloud.' });
@@ -5708,7 +5681,7 @@
                     className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center gap-2"
                   >
                     <span>☁️</span>
-                    <span>{dbActionLoading ? 'Pushing...' : 'Push Local Data to Cloud'}</span>
+                    <span>{dbActionLoading ? 'Pushing...' : 'Push Local Cache to Cloud'}</span>
                   </button>
 
                   <button
@@ -5721,7 +5694,7 @@
                         await pullCloudData(activeProfileId);
                         setDbActionStatus({
                           type: 'success',
-                          message: `Successfully pulled fresh fleet records from Supabase Cloud!`
+                          message: 'Successfully refreshed fresh fleet records from Supabase Cloud!'
                         });
                       } catch (err) {
                         setDbActionStatus({ type: 'error', message: err.message || 'Failed to pull data from cloud.' });
@@ -5732,59 +5705,10 @@
                     className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs rounded-xl shadow-sm transition flex items-center gap-2"
                   >
                     <span>🔄</span>
-                    <span>{dbActionLoading ? 'Pulling...' : 'Pull Fresh from Cloud'}</span>
+                    <span>{dbActionLoading ? 'Refreshing...' : 'Refresh Data from Cloud'}</span>
                   </button>
                 </div>
               </div>
-
-              {/* Wipe Simulation Modal */}
-              {showWipeSimModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
-                  <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl p-6 space-y-4">
-                    <div className="flex items-center gap-2 text-rose-400">
-                      <span className="text-xl">🗑️</span>
-                      <h3 className="font-bold text-white text-base">Wipe Simulation Data Only?</h3>
-                    </div>
-                    <p className="text-xs text-slate-300 leading-relaxed">
-                      This will permanently delete the <strong>{simulationStats.totalSimCount} simulation records</strong> ({simulationStats.simTripsCount} trips, {simulationStats.simTrucksCount} trucks, {simulationStats.simExpCount} expenses) from both local state and Supabase Cloud.
-                    </p>
-                    <div className="p-3 bg-emerald-950/50 border border-emerald-800 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
-                      <span>🛡️</span>
-                      <span>All of your real business entries will remain 100% safe and intact.</span>
-                    </div>
-                    <div className="flex justify-end gap-2 pt-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowWipeSimModal(false)}
-                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          setDbActionLoading(true);
-                          setShowWipeSimModal(false);
-                          try {
-                            await wipeSimulationData();
-                            setDbActionStatus({
-                              type: 'success',
-                              message: 'Successfully wiped all simulation records! Your real fleet data is preserved.'
-                            });
-                          } catch (err) {
-                            setDbActionStatus({ type: 'error', message: err.message || 'Failed to wipe simulation data.' });
-                          } finally {
-                            setDbActionLoading(false);
-                          }
-                        }}
-                        className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg"
-                      >
-                        Yes, Wipe Simulation Data
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
@@ -6344,7 +6268,7 @@
 
     // --- AUTHENTICATION & MULTI-TENANT ACCESS SCREEN ---
     function AuthScreen() {
-      const { login, signup, resetPassword } = useFleet();
+      const { login, signup, resetPassword, loginDemo } = useFleet();
       const [authMode, setAuthMode] = useState('login'); // 'login' | 'signup' | 'forgot'
       const [loginUser, setLoginUser] = useState('');
       const [loginPass, setLoginPass] = useState('');
@@ -6375,18 +6299,6 @@
           setErrorMsg(err.message || 'Invalid username or password');
         } finally {
           setIsLoading(false);
-        }
-      };
-
-      const handleQuickLogin = (uname, pass) => {
-        setErrorMsg('');
-        setSuccessMsg('');
-        setLoginUser(uname);
-        setLoginPass(pass);
-        try {
-          login(uname, pass);
-        } catch (err) {
-          setErrorMsg(err.message);
         }
       };
 
@@ -6616,35 +6528,24 @@
                   </button>
                 </form>
 
-                {/* Demo Accounts Quick Login */}
+                {/* Dedicated Demo Mode Sandbox */}
                 <div className="mt-6 pt-5 border-t border-slate-800/80">
-                  <div className="text-[11px] font-bold text-slate-400 mb-2.5 flex items-center justify-between">
-                    <span>⚡ Quick Demo Sign-In:</span>
-                    <span className="text-[10px] text-slate-500">1-click isolated switch</span>
-                  </div>
-                  <div className="grid grid-cols-1 gap-2">
+                  <div className="text-center">
+                    <p className="text-[11px] text-slate-400 mb-2.5">
+                      Want to test drive AR FleetTrack without an account?
+                    </p>
                     <button
                       type="button"
-                      onClick={() => handleQuickLogin('apex', 'password123')}
-                      className="p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/50 text-left transition flex items-center justify-between group"
+                      onClick={loginDemo}
+                      className="w-full py-2.5 px-4 rounded-xl bg-slate-950 hover:bg-slate-800/90 border border-amber-500/40 hover:border-amber-400 text-amber-400 font-bold text-xs flex items-center justify-center gap-2 transition shadow-md group"
                     >
-                      <div>
-                        <div className="text-xs font-bold text-white group-hover:text-amber-400 transition-colors">🏢 Apex Logistics India</div>
-                        <div className="text-[10px] font-mono text-slate-400">user: apex &bull; pass: password123</div>
-                      </div>
-                      <span className="text-xs text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity">Login →</span>
+                      <span>⚡</span>
+                      <span>Demo Mode (Local Offline Sandbox)</span>
+                      <span className="text-xs text-amber-400 transition-transform group-hover:translate-x-1">→</span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => handleQuickLogin('kiran', 'password123')}
-                      className="p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/50 text-left transition flex items-center justify-between group"
-                    >
-                      <div>
-                        <div className="text-xs font-bold text-white group-hover:text-amber-400 transition-colors">🚛 Kiran Roadways Enterprise</div>
-                        <div className="text-[10px] font-mono text-slate-400">user: kiran &bull; pass: password123</div>
-                      </div>
-                      <span className="text-xs text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity">Login →</span>
-                    </button>
+                    <p className="text-[10px] text-slate-500 mt-2">
+                      Pre-loaded with sample fleet, trips & expenses. Changes stay strictly in your local browser and never touch the live database.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -6723,113 +6624,6 @@
       );
     }
 
-    // --- MODAL: STORAGE MODE SWITCHER (CLOUD POSTGRESQL VS OFFLINE DEMO SANDBOX) ---
-    function StorageModeModal({ onClose, onOpenMastersDb }) {
-      const { storageMode, setStorageMode } = useFleet();
-
-      return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl p-6 space-y-4">
-            <div className="flex justify-between items-center pb-3 border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <span className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400 text-lg">☁️</span>
-                <div>
-                  <h3 className="font-bold text-white text-base">Select Storage & Operation Mode</h3>
-                  <p className="text-[11px] text-slate-400">Switch between Live Cloud PostgreSQL & Offline Demo Sandbox</p>
-                </div>
-              </div>
-              <button onClick={onClose} className="text-slate-400 hover:text-white text-lg">✕</button>
-            </div>
-
-            <div className="space-y-3">
-              {/* Option 1: Live Cloud Database */}
-              <div
-                onClick={() => {
-                  setStorageMode('cloud');
-                  onClose();
-                }}
-                className={`p-4 rounded-2xl border cursor-pointer transition ${
-                  storageMode === 'cloud'
-                    ? 'bg-emerald-950/50 border-emerald-500 ring-1 ring-emerald-500/50 shadow-lg'
-                    : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xl">☁️</span>
-                    <span className="font-bold text-sm text-white">Live Cloud Database (PostgreSQL)</span>
-                  </div>
-                  {storageMode === 'cloud' && (
-                    <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded bg-emerald-500 text-slate-950">Active</span>
-                  )}
-                </div>
-                <p className="text-xs text-slate-300 leading-relaxed mb-2">
-                  All fleet transactions sync directly with your dedicated Supabase PostgreSQL cloud database (<span className="text-emerald-400 font-mono">vdmfymirrdkebnwlgnqz</span>). Your data is accessible from any computer or mobile browser.
-                </p>
-                <div className="text-[10px] text-emerald-400/90 font-semibold flex items-center gap-2">
-                  <span>● Multi-Device Sync</span>
-                  <span>● Cloud Persistence</span>
-                  <span>● PostgreSQL 15</span>
-                </div>
-              </div>
-
-              {/* Option 2: Offline Demo Sandbox */}
-              <div
-                onClick={() => {
-                  setStorageMode('demo');
-                  onClose();
-                }}
-                className={`p-4 rounded-2xl border cursor-pointer transition ${
-                  storageMode === 'demo'
-                    ? 'bg-amber-950/50 border-amber-500 ring-1 ring-amber-500/50 shadow-lg'
-                    : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xl">💻</span>
-                    <span className="font-bold text-sm text-white">Offline Demo Sandbox (Local Mode)</span>
-                  </div>
-                  {storageMode === 'demo' && (
-                    <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded bg-amber-500 text-slate-950">Active</span>
-                  )}
-                </div>
-                <p className="text-xs text-slate-300 leading-relaxed mb-2">
-                  Data operates strictly inside this browser's local sandbox without making any network calls to the cloud database. Perfect for sandbox testing, training staff, and working offline.
-                </p>
-                <div className="text-[10px] text-amber-400/90 font-semibold flex items-center gap-2">
-                  <span>● 100% Offline Capable</span>
-                  <span>● Zero Cloud Network Calls</span>
-                  <span>● Isolated Sandbox</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="pt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/80">
-              <button
-                type="button"
-                onClick={() => {
-                  onClose();
-                  onOpenMastersDb();
-                }}
-                className="text-xs text-amber-400 hover:text-amber-300 underline font-semibold flex items-center gap-1"
-              >
-                <span>⚙️ Open Cloud DB & Demo Data Manager</span>
-                <span>↗</span>
-              </button>
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
     // --- MAIN APP COMPONENT ---
     function App() {
       const {
@@ -6844,7 +6638,6 @@
       const [clearWipeMasters, setClearWipeMasters] = useState(false);
       const [clearConfirmed, setClearConfirmed] = useState(false);
       const [showChangePassModal, setShowChangePassModal] = useState(false);
-      const [showStorageModal, setShowStorageModal] = useState(false);
 
       // Authentication Gate: Render AuthScreen if user is not signed in
       if (!currentUser) {
@@ -6910,21 +6703,29 @@
                   </button>
                 </div>
 
-                {/* Storage Mode Toggle Pill */}
-                <button
-                  type="button"
-                  onClick={() => setShowStorageModal(true)}
-                  title={storageMode === 'cloud' ? 'Live Cloud Database active (Supabase PostgreSQL). Click to switch modes.' : 'Offline Demo Mode active (Local Sandbox). Click to switch modes.'}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition shadow-sm ${
-                    storageMode === 'cloud'
-                      ? 'bg-emerald-950/70 border-emerald-600/50 text-emerald-300 hover:bg-emerald-900/60'
-                      : 'bg-amber-950/70 border-amber-600/50 text-amber-300 hover:bg-amber-900/60'
-                  }`}
-                >
-                  <span className={`w-2 h-2 rounded-full ${storageMode === 'cloud' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
-                  <span>{storageMode === 'cloud' ? '🟢 Cloud DB' : '🟡 Demo Mode'}</span>
-                  <span className="text-[10px] opacity-75">▾</span>
-                </button>
+                {/* Storage Status / Demo Badge */}
+                {currentUser?.isDemo ? (
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold shadow-sm">
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+                    <span>🟡 Demo Sandbox</span>
+                    <button
+                      type="button"
+                      onClick={logout}
+                      title="Exit Demo Sandbox and return to Sign In"
+                      className="ml-1 px-2 py-0.5 rounded-md bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[10px] uppercase transition"
+                    >
+                      Exit
+                    </button>
+                  </div>
+                ) : (
+                  <div
+                    title="Connected to Supabase PostgreSQL database (vdmfymirrdkebnwlgnqz). All data is saved directly to Cloud DB."
+                    className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-950/60 border border-emerald-600/40 text-emerald-300 text-xs font-bold shadow-sm"
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>🟢 Cloud DB Active</span>
+                  </div>
+                )}
 
                 {/* Profile Switcher */}
                 <div className="flex items-center bg-slate-800/90 border border-slate-700 rounded-xl p-1 shadow-sm">
@@ -6961,6 +6762,20 @@
               </div>
             </div>
           </header>
+
+          {/* Demo Sandbox Top Notice */}
+          {currentUser?.isDemo && (
+            <div className="bg-gradient-to-r from-amber-600/20 via-amber-500/10 to-amber-600/20 border-b border-amber-500/30 px-4 py-2.5 text-center text-xs text-amber-200 flex flex-wrap items-center justify-center gap-3 animate-fadeIn">
+              <span>⚡ <strong>Demo Sandbox Mode:</strong> You are exploring with sample fleet data in your local browser. All changes are stored locally and never touch the live cloud database.</span>
+              <button
+                type="button"
+                onClick={logout}
+                className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[11px] transition shadow"
+              >
+                Exit Demo & Sign In
+              </button>
+            </div>
+          )}
 
           {/* Sticky Global Date Filter */}
           <DateFilter />
@@ -7058,7 +6873,7 @@
 
                 <div className="space-y-4">
                   <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 text-xs leading-relaxed">
-                    <strong>Irreversible Action:</strong> You are about to permanently delete your business records from this browser storage. This complies with your statutory right to erasure under privacy regulations. Once deleted, this data <strong>cannot be recovered</strong>.
+                    <strong>Irreversible Action:</strong> You are about to permanently delete your business records from your Supabase PostgreSQL Cloud Database and local browser storage. This complies with your statutory right to erasure under privacy regulations. Once deleted, this data <strong>cannot be recovered</strong>.
                   </div>
 
                   <div>
@@ -7074,7 +6889,7 @@
                         />
                         <div>
                           <div className="text-xs font-bold">Operational Ledgers Only (Recommended)</div>
-                          <div className="text-[11px] text-slate-400">Permanently clears all Trips, Truck Expenses, Driver Payouts/Claims, and Client Settlements for the active profile. Preserves your registered Trucks, Companies, and Drivers.</div>
+                          <div className="text-[11px] text-slate-400">Permanently clears all Trips, Truck Expenses, Driver Payouts/Claims, and Client Settlements for the active profile from both the Cloud Database and local cache. Preserves registered Trucks, Companies, and Drivers.</div>
                         </div>
                       </label>
 
@@ -7088,7 +6903,7 @@
                         />
                         <div>
                           <div className="text-xs font-bold text-rose-300">Complete Blank Slate (Full Erasure)</div>
-                          <div className="text-[11px] text-slate-400">Permanently purges EVERYTHING: all operational records and all master registries (Trucks, Companies, Drivers). Resets the app to zero.</div>
+                          <div className="text-[11px] text-slate-400">Permanently purges EVERYTHING from your Cloud Database and local cache: all operational records and all master registries (Trucks, Companies, Drivers). Resets this account to zero.</div>
                         </div>
                       </label>
                     </div>
@@ -7119,11 +6934,13 @@
                     <button
                       type="button"
                       disabled={!clearConfirmed}
-                      onClick={() => {
-                        clearAllUserData(clearWipeMasters, clearWipeMasters);
+                      onClick={async () => {
+                        await clearAllUserData(clearWipeMasters, clearWipeMasters);
                         setShowClearModal(false);
                         setClearConfirmed(false);
-                        alert(clearWipeMasters ? 'All fleet data and master entities have been wiped to a blank slate.' : 'All operational trips and ledgers have been cleared.');
+                        alert(clearWipeMasters
+                          ? 'All fleet records and master entities have been permanently deleted from your Supabase Cloud Database and local browser.'
+                          : 'All operational trips and ledgers have been permanently deleted from your Supabase Cloud Database and local browser.');
                       }}
                       className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-extrabold text-xs rounded-xl shadow-lg transition flex items-center justify-center gap-1.5"
                     >
@@ -7137,15 +6954,6 @@
           )}
 
           {showChangePassModal && <ChangePasswordModal onClose={() => setShowChangePassModal(false)} />}
-          {showStorageModal && (
-            <StorageModeModal
-              onClose={() => setShowStorageModal(false)}
-              onOpenMastersDb={() => {
-                setShowStorageModal(false);
-                setActiveTab('masters');
-              }}
-            />
-          )}
 
           <footer className="bg-slate-900 border-t border-slate-800/80 py-4 text-center text-xs text-slate-500">
             <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
