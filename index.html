@@ -407,6 +407,38 @@
         setCurrentUser(null);
       };
 
+      const resetPassword = (usernameOrEmail, email, newPassword) => {
+        const target = users.find(x =>
+          (x.username.toLowerCase() === usernameOrEmail.trim().toLowerCase() || x.email.toLowerCase() === usernameOrEmail.trim().toLowerCase()) &&
+          x.email.toLowerCase() === email.trim().toLowerCase()
+        );
+        if (!target) {
+          throw new Error('No account found matching this username/ID and registered email address.');
+        }
+        if (!newPassword || newPassword.length < 6) {
+          throw new Error('New password must be at least 6 characters long.');
+        }
+        setUsers(prev => prev.map(u => u.id === target.id ? { ...u, password: newPassword } : u));
+        if (currentUser && currentUser.id === target.id) {
+          setCurrentUser(prev => ({ ...prev, password: newPassword }));
+        }
+        return target;
+      };
+
+      const changePassword = (currentPassword, newPassword) => {
+        if (!currentUser) throw new Error('No user is currently signed in.');
+        const target = users.find(x => x.id === currentUser.id);
+        if (!target || target.password !== currentPassword) {
+          throw new Error('Current password is incorrect.');
+        }
+        if (!newPassword || newPassword.length < 6) {
+          throw new Error('New password must be at least 6 characters long.');
+        }
+        setUsers(prev => prev.map(u => u.id === target.id ? { ...u, password: newPassword } : u));
+        setCurrentUser(prev => ({ ...prev, password: newPassword }));
+        return true;
+      };
+
       // Scoped Profiles: strictly isolated to current user's business
       const scopedProfiles = useMemo(() => {
         if (!currentUser) return [];
@@ -1130,7 +1162,7 @@
 
       return (
         <FleetContext.Provider value={{
-          currentUser, users, login, signup, logout,
+          currentUser, users, login, signup, logout, resetPassword, changePassword,
           profiles: scopedProfiles, activeProfileId, activeProfile, setActiveProfileId, addProfile, updateProfile, deleteProfile,
           activeRules, updateRules,
           activeEmailConfig, updateEmailSyncConfig, syncExpensesFromEmails, syncFromLiveGmail,
@@ -3928,7 +3960,8 @@
         addDriver, updateDriver, deleteDriver,
         activeRules, updateRules, activeProfile,
         activeEmailConfig, updateEmailSyncConfig, syncExpensesFromEmails, syncFromLiveGmail,
-        clearAllUserData
+        clearAllUserData,
+        changePassword
       } = useFleet();
 
       const [subTab, setSubTab] = useState('trucks');
@@ -3936,6 +3969,34 @@
       const [showClearModal, setShowClearModal] = useState(false);
       const [clearWipeMasters, setClearWipeMasters] = useState(false);
       const [clearConfirmed, setClearConfirmed] = useState(false);
+
+      // Account & Security Password Change State
+      const [curPass, setCurPass] = useState('');
+      const [newPass, setNewPass] = useState('');
+      const [confPass, setConfPass] = useState('');
+      const [passStatus, setPassStatus] = useState(null);
+      const [passLoading, setPassLoading] = useState(false);
+
+      const handleChangePassInMasters = (e) => {
+        e.preventDefault();
+        setPassStatus(null);
+        if (newPass !== confPass) {
+          setPassStatus({ type: 'error', message: 'New password and confirmation password do not match.' });
+          return;
+        }
+        setPassLoading(true);
+        try {
+          changePassword(curPass, newPass);
+          setPassStatus({ type: 'success', message: 'Password successfully updated!' });
+          setCurPass('');
+          setNewPass('');
+          setConfPass('');
+        } catch (err) {
+          setPassStatus({ type: 'error', message: err.message || 'Failed to update password.' });
+        } finally {
+          setPassLoading(false);
+        }
+      };
 
       // Google Identity / 1-Click Gmail Connect State (Default Client ID pre-configured)
       const DEFAULT_GOOGLE_CLIENT_ID = '371057355214-kc8o35sqpnopmth9rdtdsn4qllgj5fe3.apps.googleusercontent.com';
@@ -4301,6 +4362,7 @@
                 { id: 'drivers', label: `Driver Master (${drivers.length})`, icon: '👨‍✈️' },
                 { id: 'rules', label: 'Rules & Formulas', icon: '⚙️' },
                 { id: 'email_sync', label: 'Email Expense Sync', icon: '✉️' },
+                { id: 'security', label: 'Account & Security', icon: '🔑' },
                 { id: 'data_erasure', label: 'Privacy & Data Erasure', icon: '🗑️' },
               ].map(st => (
                 <button
@@ -4316,7 +4378,7 @@
               ))}
             </div>
 
-            {subTab !== 'rules' && subTab !== 'email_sync' && subTab !== 'data_erasure' && (
+            {subTab !== 'rules' && subTab !== 'email_sync' && subTab !== 'security' && subTab !== 'data_erasure' && (
               <div className="flex items-center gap-2">
                 <input
                   type="text"
@@ -4832,6 +4894,112 @@
             </div>
           )}
 
+          {/* SUBTAB: ACCOUNT & SECURITY (CREDENTIALS & PASSWORD CHANGE) */}
+          {subTab === 'security' && (
+            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <span className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400">🔑</span>
+                    Account & Security Settings
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Manage your login password and view your workspace credentials.
+                  </p>
+                </div>
+                <span className="text-xs px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
+                  ● Workspace Active
+                </span>
+              </div>
+
+              {/* Account Details Overview */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-950/70 p-4 rounded-xl border border-slate-800">
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Business Name</span>
+                  <div className="text-sm font-bold text-white mt-0.5">{currentUser?.businessName || 'Default'}</div>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Login Username</span>
+                  <div className="text-sm font-bold text-amber-400 font-mono mt-0.5">{currentUser?.username}</div>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Registered Recovery Email</span>
+                  <div className="text-sm font-bold text-slate-300 font-mono mt-0.5">{currentUser?.email || 'None'}</div>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Tenant Account ID</span>
+                  <div className="text-sm font-bold text-slate-400 font-mono mt-0.5">{currentUser?.id}</div>
+                </div>
+              </div>
+
+              {/* Change Password Card */}
+              <div className="bg-slate-950/40 border border-slate-800 rounded-2xl p-5 max-w-xl">
+                <h4 className="text-sm font-bold text-white mb-1 flex items-center gap-2">
+                  <span>🔒</span> Change Login Password
+                </h4>
+                <p className="text-xs text-slate-400 mb-4">
+                  Choose a new strong password (at least 6 characters).
+                </p>
+
+                {passStatus && (
+                  <div className={`mb-4 p-3 rounded-xl border text-xs font-semibold flex items-center gap-2 animate-fadeIn ${
+                    passStatus.type === 'success'
+                      ? 'bg-emerald-950/70 border-emerald-800 text-emerald-300'
+                      : 'bg-rose-950/70 border-rose-800 text-rose-300'
+                  }`}>
+                    <span>{passStatus.type === 'success' ? '✅' : '⚠️'}</span>
+                    <span>{passStatus.message}</span>
+                  </div>
+                )}
+
+                <form onSubmit={handleChangePassInMasters} className="space-y-3.5">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">Current Password *</label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="Enter current password"
+                      value={curPass}
+                      onChange={(e) => setCurPass(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">New Password * (Min 6 characters)</label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="Enter new password"
+                      value={newPass}
+                      onChange={(e) => setNewPass(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">Confirm New Password *</label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="Re-enter new password"
+                      value={confPass}
+                      onChange={(e) => setConfPass(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                  <div className="pt-2">
+                    <button
+                      type="submit"
+                      disabled={passLoading}
+                      className="px-6 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-md uppercase tracking-wider"
+                    >
+                      {passLoading ? 'Updating...' : 'Update Password'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
           {/* SUBTAB: DATA ERASURE & PRIVACY COMPLIANCE (RIGHT TO BE FORGOTTEN) */}
           {subTab === 'data_erasure' && (
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
@@ -5268,13 +5436,132 @@
       );
     }
 
+    // --- MODAL: CHANGE ACCOUNT PASSWORD (FOR SIGNED-IN USERS) ---
+    function ChangePasswordModal({ onClose }) {
+      const { currentUser, changePassword } = useFleet();
+      const [currentPass, setCurrentPass] = useState('');
+      const [newPass, setNewPass] = useState('');
+      const [confirmPass, setConfirmPass] = useState('');
+      const [error, setError] = useState('');
+      const [success, setSuccess] = useState('');
+      const [loading, setLoading] = useState(false);
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        setError('');
+        setSuccess('');
+        if (newPass !== confirmPass) {
+          setError('New password and confirmation password do not match.');
+          return;
+        }
+        setLoading(true);
+        try {
+          changePassword(currentPass, newPass);
+          setSuccess('Your password has been updated successfully!');
+          setCurrentPass('');
+          setNewPass('');
+          setConfirmPass('');
+          setTimeout(() => {
+            if (onClose) onClose();
+          }, 1500);
+        } catch (err) {
+          setError(err.message || 'Failed to update password.');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl p-6">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🔑</span>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Change Account Password</h3>
+                  <p className="text-[11px] text-slate-400">Update credentials for {currentUser?.username}</p>
+                </div>
+              </div>
+              <button onClick={onClose} className="text-slate-400 hover:text-white text-base">✕</button>
+            </div>
+
+            {error && (
+              <div className="mb-4 p-2.5 rounded-xl bg-rose-950/70 border border-rose-800 text-rose-200 text-xs font-semibold flex items-center gap-2">
+                <span>⚠️</span>
+                <span>{error}</span>
+              </div>
+            )}
+            {success && (
+              <div className="mb-4 p-2.5 rounded-xl bg-emerald-950/70 border border-emerald-800 text-emerald-200 text-xs font-semibold flex items-center gap-2">
+                <span>✅</span>
+                <span>{success}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSubmit} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">Current Password *</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Enter current password"
+                  value={currentPass}
+                  onChange={(e) => setCurrentPass(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">New Password * (Min 6 characters)</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Enter new secure password"
+                  value={newPass}
+                  onChange={(e) => setNewPass(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">Confirm New Password *</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Re-enter new password"
+                  value={confirmPass}
+                  onChange={(e) => setConfirmPass(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                />
+              </div>
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-2 text-xs text-slate-400 hover:text-white rounded-lg"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs shadow-md uppercase tracking-wider"
+                >
+                  {loading ? 'Saving...' : 'Update Password'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
     // --- AUTHENTICATION & MULTI-TENANT ACCESS SCREEN ---
     function AuthScreen() {
-      const { login, signup } = useFleet();
-      const [authMode, setAuthMode] = useState('login'); // 'login' or 'signup'
+      const { login, signup, resetPassword } = useFleet();
+      const [authMode, setAuthMode] = useState('login'); // 'login' | 'signup' | 'forgot'
       const [loginUser, setLoginUser] = useState('');
       const [loginPass, setLoginPass] = useState('');
       const [errorMsg, setErrorMsg] = useState('');
+      const [successMsg, setSuccessMsg] = useState('');
       const [isLoading, setIsLoading] = useState(false);
 
       // Registration fields
@@ -5283,9 +5570,16 @@
       const [regPass, setRegPass] = useState('');
       const [regEmail, setRegEmail] = useState('');
 
+      // Forgot Password fields
+      const [forgotUser, setForgotUser] = useState('');
+      const [forgotEmail, setForgotEmail] = useState('');
+      const [forgotNewPass, setForgotNewPass] = useState('');
+      const [forgotConfirmPass, setForgotConfirmPass] = useState('');
+
       const handleLogin = (e) => {
         if (e) e.preventDefault();
         setErrorMsg('');
+        setSuccessMsg('');
         setIsLoading(true);
         try {
           login(loginUser, loginPass);
@@ -5298,6 +5592,7 @@
 
       const handleQuickLogin = (uname, pass) => {
         setErrorMsg('');
+        setSuccessMsg('');
         setLoginUser(uname);
         setLoginPass(pass);
         try {
@@ -5310,6 +5605,7 @@
       const handleSignup = (e) => {
         e.preventDefault();
         setErrorMsg('');
+        setSuccessMsg('');
         if (!regBusiness.trim() || !regUser.trim() || !regPass.trim() || !regEmail.trim()) {
           setErrorMsg('All fields are required to register.');
           return;
@@ -5319,6 +5615,34 @@
           signup(regBusiness, regUser, regPass, regEmail);
         } catch (err) {
           setErrorMsg(err.message || 'Registration failed');
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      const handleResetPassword = (e) => {
+        e.preventDefault();
+        setErrorMsg('');
+        setSuccessMsg('');
+        if (!forgotUser.trim() || !forgotEmail.trim() || !forgotNewPass.trim() || !forgotConfirmPass.trim()) {
+          setErrorMsg('All fields are required to verify and reset password.');
+          return;
+        }
+        if (forgotNewPass !== forgotConfirmPass) {
+          setErrorMsg('New password and confirmation password do not match.');
+          return;
+        }
+        setIsLoading(true);
+        try {
+          resetPassword(forgotUser, forgotEmail, forgotNewPass);
+          setSuccessMsg('Password reset successfully! You can now sign in with your new password.');
+          setLoginUser(forgotUser.trim());
+          setLoginPass(forgotNewPass);
+          setForgotNewPass('');
+          setForgotConfirmPass('');
+          setAuthMode('login');
+        } catch (err) {
+          setErrorMsg(err.message || 'Password reset failed.');
         } finally {
           setIsLoading(false);
         }
@@ -5347,9 +5671,9 @@
             <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-950/80 rounded-2xl border border-slate-800 mb-6">
               <button
                 type="button"
-                onClick={() => { setAuthMode('login'); setErrorMsg(''); }}
+                onClick={() => { setAuthMode('login'); setErrorMsg(''); setSuccessMsg(''); }}
                 className={`py-2 rounded-xl text-xs font-bold transition ${
-                  authMode === 'login'
+                  authMode === 'login' || authMode === 'forgot'
                     ? 'bg-amber-500 text-slate-950 font-black shadow-md'
                     : 'text-slate-400 hover:text-white'
                 }`}
@@ -5358,7 +5682,7 @@
               </button>
               <button
                 type="button"
-                onClick={() => { setAuthMode('signup'); setErrorMsg(''); }}
+                onClick={() => { setAuthMode('signup'); setErrorMsg(''); setSuccessMsg(''); }}
                 className={`py-2 rounded-xl text-xs font-bold transition ${
                   authMode === 'signup'
                     ? 'bg-amber-500 text-slate-950 font-black shadow-md'
@@ -5369,6 +5693,14 @@
               </button>
             </div>
 
+            {/* Success Notification */}
+            {successMsg && (
+              <div className="mb-4 p-3 rounded-xl bg-emerald-950/70 border border-emerald-800/80 text-emerald-200 text-xs font-semibold animate-fadeIn flex items-center gap-2">
+                <span>✅</span>
+                <span>{successMsg}</span>
+              </div>
+            )}
+
             {/* Error Message */}
             {errorMsg && (
               <div className="mb-4 p-3 rounded-xl bg-rose-950/70 border border-rose-800/80 text-rose-200 text-xs font-semibold animate-fadeIn flex items-center gap-2">
@@ -5377,8 +5709,83 @@
               </div>
             )}
 
-            {/* Login Form */}
-            {authMode === 'login' ? (
+            {/* Forgot Password Form */}
+            {authMode === 'forgot' ? (
+              <div>
+                <form onSubmit={handleResetPassword} className="space-y-3.5">
+                  <div className="text-center mb-3">
+                    <h3 className="text-sm font-bold text-white flex items-center justify-center gap-1.5">
+                      <span>🔑</span> Reset Forgotten Password
+                    </h3>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Verify your account details to set a new password.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">Username or Account ID *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. apex, kiran, or your username"
+                      value={forgotUser}
+                      onChange={(e) => setForgotUser(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">Registered Recovery Email *</label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="e.g. owner@apexlogistics.in"
+                      value={forgotEmail}
+                      onChange={(e) => setForgotEmail(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-mono"
+                    />
+                    <p className="text-[10px] text-slate-500 mt-1">Must match the registered email for this account.</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">New Password * (Min 6 characters)</label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="Enter new password"
+                      value={forgotNewPass}
+                      onChange={(e) => setForgotNewPass(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">Confirm New Password *</label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="Re-enter new password"
+                      value={forgotConfirmPass}
+                      onChange={(e) => setForgotConfirmPass(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full mt-2 py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-amber-500/20 transition duration-150 uppercase tracking-wider"
+                  >
+                    {isLoading ? 'Resetting Password...' : 'Reset Password & Proceed'}
+                  </button>
+                  <div className="text-center pt-2">
+                    <button
+                      type="button"
+                      onClick={() => { setAuthMode('login'); setErrorMsg(''); setSuccessMsg(''); }}
+                      className="text-xs text-slate-400 hover:text-white underline font-medium"
+                    >
+                      ← Back to Sign In
+                    </button>
+                  </div>
+                </form>
+              </div>
+            ) : authMode === 'login' ? (
+              /* Login Form */
               <div>
                 <form onSubmit={handleLogin} className="space-y-4">
                   <div>
@@ -5393,7 +5800,16 @@
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1.5">Password</label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-xs font-bold text-slate-300">Password</label>
+                      <button
+                        type="button"
+                        onClick={() => { setAuthMode('forgot'); setErrorMsg(''); setSuccessMsg(''); }}
+                        className="text-[11px] text-amber-400 hover:text-amber-300 font-semibold hover:underline"
+                      >
+                        Forgot Password?
+                      </button>
+                    </div>
                     <input
                       type="password"
                       required
@@ -5528,6 +5944,7 @@
       const [showClearModal, setShowClearModal] = useState(false);
       const [clearWipeMasters, setClearWipeMasters] = useState(false);
       const [clearConfirmed, setClearConfirmed] = useState(false);
+      const [showChangePassModal, setShowChangePassModal] = useState(false);
 
       // Authentication Gate: Render AuthScreen if user is not signed in
       if (!currentUser) {
@@ -5577,11 +5994,20 @@
 
               {/* User Account, Profile Switcher, New Entry & Logout */}
               <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-                {/* Active User Badge */}
+                {/* Active User Badge & Change Password */}
                 <div className="flex items-center gap-2 bg-slate-800/90 border border-slate-700/80 px-2.5 py-1.5 rounded-xl text-xs">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                   <span className="font-bold text-white font-mono">{currentUser.username}</span>
                   <span className="text-[11px] text-slate-400 hidden lg:inline">({currentUser.businessName})</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowChangePassModal(true)}
+                    title="Change Account Password"
+                    className="ml-1 px-1.5 py-0.5 rounded-md bg-slate-700/80 hover:bg-amber-500 hover:text-slate-950 text-slate-300 text-[10px] font-bold transition flex items-center gap-1"
+                  >
+                    <span>🔑</span>
+                    <span className="hidden xl:inline">Password</span>
+                  </button>
                 </div>
 
                 {/* Profile Switcher */}
@@ -5793,6 +6219,8 @@
               </div>
             </div>
           )}
+
+          {showChangePassModal && <ChangePasswordModal onClose={() => setShowChangePassModal(false)} />}
 
           <footer className="bg-slate-900 border-t border-slate-800/80 py-4 text-center text-xs text-slate-500">
             <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">

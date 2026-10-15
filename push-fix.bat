@@ -12,8 +12,8 @@ cd /d "C:\Users\athar\.gemini\antigravity\scratch\fleet-management"
 echo [1/3] Adding all files...
 git add -A
 
-echo [2/3] Committing updates: Driver claims reimbursable option, clean Remaining Due, same-date timeline ordering, and trip entry simplification...
-git commit -m "Feat: Driver claims reimbursable option, clean Remaining Due, same-date timeline ordering, and trip entry simplification"
+echo [2/3] Committing updates: Forgot Password recovery (Option 1) and Change Password security controls...
+git commit -m "Feat: Add Forgot Password recovery (Option 1) and Change Password security controls"
 
 echo [3/3] Pushing to GitHub main branch...
 git push -u origin main
@@ -21,7 +21,7 @@ git push -u origin main
 echo.
 echo ==============================================================================
 echo Done! Please check https://github.com/Atharsh00/ar-fleettrack
-echo The latest commit will show: "Feat: Driver claims reimbursable option, clean Remaining Due, same-date timeline ordering, and trip entry simplification"
+echo The latest commit will show: "Feat: Add Forgot Password recovery (Option 1) and Change Password security controls"
 echo ==============================================================================
 echo.
 pause
