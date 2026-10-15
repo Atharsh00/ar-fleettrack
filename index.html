@@ -17,6 +17,8 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Supabase JS Client v2 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <!-- Google Identity Services (GIS) for 1-Click Gmail Connect -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
@@ -67,6 +69,44 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo, createContext, useContext } = React;
 
+    // --- SUPABASE CLOUD DATABASE CONFIGURATION ---
+    const SUPABASE_CONFIG = {
+      url: 'https://vdmfymirrdkebnwlgnqz.supabase.co',
+      anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZkbWZ5bWlycmRrZWJud2xnbnF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIwODgzNzAsImV4cCI6MjEwNzY2NDM3MH0.smw-W0dH9SGepzySxwFG9pnaAkHnn63Z0tChcPj4BpU'
+    };
+
+    let supabaseClient = null;
+    try {
+      if (window.supabase && typeof window.supabase.createClient === 'function') {
+        supabaseClient = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
+      }
+    } catch (e) {
+      console.warn('Supabase client init error:', e);
+    }
+
+    // Bi-directional key mappers between React CamelCase & PostgreSQL snake_case
+    const camelToSnake = (str) => str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+    const snakeToCamel = (str) => str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+
+    const toSnakeObj = (obj) => {
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+      const res = {};
+      for (const [k, v] of Object.entries(obj)) {
+        if (v === undefined) continue;
+        res[camelToSnake(k)] = v;
+      }
+      return res;
+    };
+
+    const toCamelObj = (obj) => {
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+      const res = {};
+      for (const [k, v] of Object.entries(obj)) {
+        res[snakeToCamel(k)] = v;
+      }
+      return res;
+    };
+
     const getRelDate = (daysAgo) => {
       const d = new Date();
       d.setDate(d.getDate() - daysAgo);
@@ -91,7 +131,7 @@
       { id: 'trk-4', profileId: 'prof-1', registrationNumber: 'KA-04-MB-7711', model: 'Eicher Pro 6028', capacity: '20 Ton' },
       { id: 'trk-5', profileId: 'prof-2', registrationNumber: 'GJ-06-KK-1199', model: 'Volvo FMX 460', capacity: '32 Ton' },
       { id: 'trk-6', profileId: 'prof-2', registrationNumber: 'RJ-14-TY-8833', model: 'Tata Prima 5530.S', capacity: '40 Ton' },
-    ];
+    ].map(t => ({ ...t, isSimulation: true }));
 
     const initialCompanies = [
       { id: 'cmp-1', profileId: 'prof-1', name: 'LogiXpress Logistics Ltd', contactPerson: 'Rajesh Sharma', phone: '+91 98220 11223' },
@@ -99,7 +139,7 @@
       { id: 'cmp-3', profileId: 'prof-1', name: 'Tata Steel Supply Chain', contactPerson: 'Vikram Verma', phone: '+91 98330 99887' },
       { id: 'cmp-4', profileId: 'prof-1', name: 'Amazon Relay Partner Ops', contactPerson: 'Pooja Iyer', phone: '+91 98440 22334' },
       { id: 'cmp-5', profileId: 'prof-2', name: 'Adani Ports Logistics', contactPerson: 'Suresh Patel', phone: '+91 98990 12345' },
-    ];
+    ].map(c => ({ ...c, isSimulation: true }));
 
     const initialDrivers = [
       { id: 'drv-1', profileId: 'prof-1', name: 'Ramesh Yadav', phone: '+91 97110 12345', licenseNumber: 'MH-12-201500892', status: 'ACTIVE' },
@@ -107,7 +147,7 @@
       { id: 'drv-3', profileId: 'prof-1', name: 'Manoj Kumar', phone: '+91 99330 67890', licenseNumber: 'UP-14-201800983', status: 'ACTIVE' },
       { id: 'drv-4', profileId: 'prof-1', name: 'Balwant Patel', phone: '+91 96440 11229', licenseNumber: 'GJ-06-201700445', status: 'ACTIVE' },
       { id: 'drv-5', profileId: 'prof-2', name: 'Harpreet Singh', phone: '+91 97550 88221', licenseNumber: 'HR-02-201600321', status: 'ACTIVE' },
-    ];
+    ].map(d => ({ ...d, isSimulation: true }));
 
     const initialTrips = [
       {
@@ -236,7 +276,7 @@
         balancePending: 31550, // 95000 - 60000 - 2500 - 950
         notes: 'Containerized freight'
       }
-    ];
+    ].map(t => ({ ...t, isSimulation: true }));
 
     const initialExpenses = [
       { id: 'exp-1', profileId: 'prof-1', date: getRelDate(1), truckId: 'trk-1', category: 'DIESEL', amount: 16500, paymentMethod: 'Fleet Card', notes: 'Diesel 180L IOCL Highway' },
@@ -248,7 +288,7 @@
       { id: 'exp-7', profileId: 'prof-1', date: getRelDate(14), truckId: 'trk-4', category: 'SPARE_PARTS', amount: 12500, paymentMethod: 'Bank Transfer', notes: 'New alternator & battery' },
       { id: 'exp-8', profileId: 'prof-2', date: getRelDate(2), truckId: 'trk-5', category: 'DIESEL', amount: 28000, paymentMethod: 'Fleet Card', notes: 'Port exit diesel fill' },
       { id: 'exp-9', profileId: 'prof-2', date: getRelDate(4), truckId: 'trk-5', category: 'TOLL', amount: 3800, paymentMethod: 'FASTag', notes: 'National Highway tolls' }
-    ];
+    ].map(e => ({ ...e, isSimulation: true }));
 
     const initialDriverPayments = [
       { id: 'dp-1', profileId: 'prof-1', date: getRelDate(3), driverName: 'Ramesh Yadav', type: 'SALARY_PAYOUT', amount: 10000, paymentMethod: 'UPI', description: 'Weekly advance cash payment' },
@@ -257,13 +297,13 @@
       { id: 'dp-4', profileId: 'prof-1', date: getRelDate(5), driverName: 'Sukhvinder Singh', type: 'DRIVER_EXPENSE', amount: 850, description: 'RTO weighbridge fee & parking' },
       { id: 'dp-5', profileId: 'prof-1', date: getRelDate(10), driverName: 'Manoj Kumar', type: 'SALARY_PAYOUT', amount: 12000, paymentMethod: 'Bank Transfer', description: 'Monthly driver advance' },
       { id: 'dp-6', profileId: 'prof-2', date: getRelDate(2), driverName: 'Harpreet Singh', type: 'SALARY_PAYOUT', amount: 15000, paymentMethod: 'UPI', description: 'Long haul advance payout' }
-    ];
+    ].map(dp => ({ ...dp, isSimulation: true }));
 
     const initialSettlements = [
       { id: 'set-1', profileId: 'prof-1', date: getRelDate(10), companyName: 'LogiXpress Logistics Ltd', amount: 15000, paymentMethod: 'NEFT', referenceNumber: 'NEFT99238472', notes: 'Cleared part of Pune trip invoice' },
       { id: 'set-2', profileId: 'prof-1', date: getRelDate(38), companyName: 'Shree Cement Carriers', amount: 10000, paymentMethod: 'Cheque', referenceNumber: 'CHQ-882103', notes: 'Settlement for previous trips' },
       { id: 'set-3', profileId: 'prof-2', date: getRelDate(1), companyName: 'Adani Ports Logistics', amount: 20000, paymentMethod: 'RTGS', referenceNumber: 'RTGS441199', notes: 'Port clearance settlement' }
-    ];
+    ].map(s => ({ ...s, isSimulation: true }));
 
     // --- MULTI-TENANT USER ACCOUNTS ---
     const initialUsers = [
@@ -348,6 +388,38 @@
 
       const [dateFilter, setDateFilter] = useState({ preset: 'all', startDate: '', endDate: '' });
       const currency = '₹'; // Exclusively INR
+
+      // --- STORAGE MODE: CLOUD (Supabase PostgreSQL) vs DEMO (Local Sandbox) ---
+      const [storageMode, setStorageMode] = useState(() => {
+        try {
+          return localStorage.getItem('fleet_storage_mode') || 'cloud';
+        } catch (e) {
+          return 'cloud';
+        }
+      });
+      useEffect(() => {
+        try {
+          localStorage.setItem('fleet_storage_mode', storageMode);
+        } catch (e) {}
+      }, [storageMode]);
+
+      const [cloudSyncStatus, setCloudSyncStatus] = useState({
+        connected: Boolean(supabaseClient),
+        lastSyncedAt: null,
+        syncing: false,
+        error: null
+      });
+
+      // Simulation records counter
+      const simulationStats = useMemo(() => {
+        const simTripsCount = trips.filter(t => t.isSimulation).length;
+        const simTrucksCount = trucks.filter(t => t.isSimulation).length;
+        const simExpCount = expenses.filter(e => e.isSimulation).length;
+        const simDpCount = driverPayments.filter(p => p.isSimulation).length;
+        const simSetCount = settlements.filter(s => s.isSimulation).length;
+        const totalSimCount = simTripsCount + simTrucksCount + simExpCount + simDpCount + simSetCount;
+        return { simTripsCount, simTrucksCount, simExpCount, simDpCount, simSetCount, totalSimCount };
+      }, [trips, trucks, expenses, driverPayments, settlements]);
 
       // Sync to localStorage
       useEffect(() => { localStorage.setItem(`${STORAGE_KEY}_users`, JSON.stringify(users)); }, [users]);
@@ -516,6 +588,283 @@
       const scopedDriverPayments = useMemo(() => driverPayments.filter(p => p.profileId === activeProfileId), [driverPayments, activeProfileId]);
       const scopedSettlements = useMemo(() => settlements.filter(s => s.profileId === activeProfileId), [settlements, activeProfileId]);
 
+      // --- SUPABASE CLOUD SYNC & DEMO SANDBOX ENGINES ---
+      const pullCloudData = async (profId = null) => {
+        if (!supabaseClient) return;
+        const targetProf = profId || activeProfileId;
+        setCloudSyncStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const [tRes, cRes, dRes, trRes, expRes, dpRes, setRes, rulRes] = await Promise.all([
+            supabaseClient.from('trucks').select('*').eq('profile_id', targetProf),
+            supabaseClient.from('companies').select('*').eq('profile_id', targetProf),
+            supabaseClient.from('drivers').select('*').eq('profile_id', targetProf),
+            supabaseClient.from('trips').select('*').eq('profile_id', targetProf).order('date', { ascending: false }),
+            supabaseClient.from('expenses').select('*').eq('profile_id', targetProf).order('date', { ascending: false }),
+            supabaseClient.from('driver_payments').select('*').eq('profile_id', targetProf).order('date', { ascending: false }),
+            supabaseClient.from('settlements').select('*').eq('profile_id', targetProf).order('date', { ascending: false }),
+            supabaseClient.from('rules').select('*').eq('profile_id', targetProf)
+          ]);
+
+          const cloudHasData = (tRes.data && tRes.data.length > 0) || (trRes.data && trRes.data.length > 0) || (cRes.data && cRes.data.length > 0);
+
+          if (cloudHasData) {
+            if (tRes.data) setTrucks(prev => [...tRes.data.map(toCamelObj), ...prev.filter(x => x.profileId !== targetProf)]);
+            if (cRes.data) setCompanies(prev => [...cRes.data.map(toCamelObj), ...prev.filter(x => x.profileId !== targetProf)]);
+            if (dRes.data) setDrivers(prev => [...dRes.data.map(toCamelObj), ...prev.filter(x => x.profileId !== targetProf)]);
+            if (trRes.data) {
+              const mappedTrips = trRes.data.map(t => {
+                const camel = toCamelObj(t);
+                let drops = camel.additionalDrops;
+                if (typeof drops === 'string') {
+                  try { drops = JSON.parse(drops); } catch (e) { drops = []; }
+                }
+                return {
+                  ...camel,
+                  additionalDrops: Array.isArray(drops) ? drops : [],
+                  totalRent: Number(camel.totalRent || 0),
+                  commissionAmount: Number(camel.commissionAmount || 0),
+                  advanceReceived: Number(camel.advanceReceived || 0),
+                  receivedAmount: Number(camel.receivedAmount || 0),
+                  tdsAmount: Number(camel.tdsAmount || 0),
+                  netRent: Number(camel.netRent || 0),
+                  driverCommission: Number(camel.driverCommission || 0),
+                  balancePending: Number(camel.balancePending || 0),
+                  isSimulation: Boolean(camel.isSimulation)
+                };
+              });
+              setTrips(prev => [...mappedTrips, ...prev.filter(x => x.profileId !== targetProf)]);
+            }
+            if (expRes.data) setExpenses(prev => [...expRes.data.map(toCamelObj), ...prev.filter(x => x.profileId !== targetProf)]);
+            if (dpRes.data) setDriverPayments(prev => [...dpRes.data.map(toCamelObj), ...prev.filter(x => x.profileId !== targetProf)]);
+            if (setRes.data) setSettlements(prev => [...setRes.data.map(toCamelObj), ...prev.filter(x => x.profileId !== targetProf)]);
+            if (rulRes.data && rulRes.data.length > 0) {
+              const r = rulRes.data[0];
+              setRules(prev => ({
+                ...prev,
+                [targetProf]: {
+                  defaultDriverSalaryPercent: Number(r.default_driver_salary_percent) || 15,
+                  defaultTdsPercent: Number(r.default_tds_percent) || 1
+                }
+              }));
+            }
+          }
+
+          setCloudSyncStatus({
+            connected: true,
+            lastSyncedAt: new Date().toISOString(),
+            syncing: false,
+            error: null
+          });
+        } catch (err) {
+          console.warn('Cloud sync error:', err);
+          setCloudSyncStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+        }
+      };
+
+      useEffect(() => {
+        if (storageMode === 'cloud' && supabaseClient && activeProfileId) {
+          pullCloudData(activeProfileId);
+        }
+      }, [storageMode, activeProfileId]);
+
+      // Push local data into Supabase Cloud
+      const syncLocalToCloud = async () => {
+        if (!supabaseClient) throw new Error('Supabase client is not connected.');
+        setCloudSyncStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const curProf = profiles.find(p => p.id === activeProfileId) || { id: activeProfileId, name: activeProfile?.name || 'Default Entity', isDefault: true };
+          await supabaseClient.from('profiles').upsert(toSnakeObj(curProf));
+
+          if (scopedTrucks.length > 0) await supabaseClient.from('trucks').upsert(scopedTrucks.map(toSnakeObj));
+          if (scopedCompanies.length > 0) await supabaseClient.from('companies').upsert(scopedCompanies.map(toSnakeObj));
+          if (scopedDrivers.length > 0) await supabaseClient.from('drivers').upsert(scopedDrivers.map(toSnakeObj));
+
+          if (scopedTrips.length > 0) await supabaseClient.from('trips').upsert(scopedTrips.map(toSnakeObj));
+          if (scopedExpenses.length > 0) await supabaseClient.from('expenses').upsert(scopedExpenses.map(toSnakeObj));
+          if (scopedDriverPayments.length > 0) await supabaseClient.from('driver_payments').upsert(scopedDriverPayments.map(toSnakeObj));
+          if (scopedSettlements.length > 0) await supabaseClient.from('settlements').upsert(scopedSettlements.map(toSnakeObj));
+
+          if (activeRules) {
+            await supabaseClient.from('rules').upsert({
+              profile_id: activeProfileId,
+              default_driver_salary_percent: activeRules.defaultDriverSalaryPercent,
+              default_tds_percent: activeRules.defaultTdsPercent
+            });
+          }
+
+          setCloudSyncStatus({
+            connected: true,
+            lastSyncedAt: new Date().toISOString(),
+            syncing: false,
+            error: null
+          });
+          return { success: true, count: scopedTrips.length + scopedExpenses.length + scopedTrucks.length };
+        } catch (e) {
+          setCloudSyncStatus(prev => ({ ...prev, syncing: false, error: e.message }));
+          throw e;
+        }
+      };
+
+      // Generate realistic demo/simulation fleet operations
+      const generateSimulationData = async () => {
+        const simTrucks = [
+          { id: `trk-sim-${Date.now()}-1`, profileId: activeProfileId, registrationNumber: 'MH-12-TX-4401', model: 'Tata Signa 4825.TK', capacity: '28 Ton', isSimulation: true },
+          { id: `trk-sim-${Date.now()}-2`, profileId: activeProfileId, registrationNumber: 'MH-14-BT-9922', model: 'BharatBenz 3528C', capacity: '22 Ton', isSimulation: true },
+          { id: `trk-sim-${Date.now()}-3`, profileId: activeProfileId, registrationNumber: 'DL-01-SM-1205', model: 'Ashok Leyland 4220', capacity: '26 Ton', isSimulation: true },
+        ];
+        const simCompanies = [
+          { id: `cmp-sim-${Date.now()}-1`, profileId: activeProfileId, name: 'Simulate Freight Logistics Pvt Ltd', contactPerson: 'Arun Deshmukh', phone: '+91 98221 00011', isSimulation: true },
+          { id: `cmp-sim-${Date.now()}-2`, profileId: activeProfileId, name: 'National Heavy Movers Ltd', contactPerson: 'Karan Mehra', phone: '+91 98112 00022', isSimulation: true },
+          { id: `cmp-sim-${Date.now()}-3`, profileId: activeProfileId, name: 'Western Corridors Transit', contactPerson: 'Sunita Rao', phone: '+91 98334 00033', isSimulation: true },
+        ];
+        const simDrivers = [
+          { id: `drv-sim-${Date.now()}-1`, profileId: activeProfileId, name: 'Dinesh Sharma (Demo)', phone: '+91 97111 00001', licenseNumber: 'MH-12-2019-DEMO1', status: 'ACTIVE', isSimulation: true },
+          { id: `drv-sim-${Date.now()}-2`, profileId: activeProfileId, name: 'Gurpreet Singh (Demo)', phone: '+91 98222 00002', licenseNumber: 'PB-10-2016-DEMO2', status: 'ACTIVE', isSimulation: true },
+          { id: `drv-sim-${Date.now()}-3`, profileId: activeProfileId, name: 'Mohan Lal (Demo)', phone: '+91 99333 00003', licenseNumber: 'UP-14-2020-DEMO3', status: 'ACTIVE', isSimulation: true },
+        ];
+        const simTrips = [
+          {
+            id: `trp-sim-${Date.now()}-1`,
+            profileId: activeProfileId,
+            date: getRelDate(1),
+            truckId: simTrucks[0].id,
+            companyName: simCompanies[0].name,
+            driverName: simDrivers[0].name,
+            fromLocation: 'Mumbai Port',
+            toLocation: 'Pune Chakan',
+            additionalDrops: [],
+            route: 'Mumbai Port -> Pune Chakan',
+            totalRent: 42000,
+            commissionAmount: 1000,
+            isTdsDeducted: true,
+            tdsAmount: 420,
+            advanceReceived: 20000,
+            receivedAmount: 0,
+            netRent: 40580,
+            driverCommission: 6087,
+            balancePending: 20580,
+            notes: 'Demo trip - auto parts shipment',
+            isSimulation: true
+          },
+          {
+            id: `trp-sim-${Date.now()}-2`,
+            profileId: activeProfileId,
+            date: getRelDate(3),
+            truckId: simTrucks[1].id,
+            companyName: simCompanies[1].name,
+            driverName: simDrivers[1].name,
+            fromLocation: 'Nagpur Depot',
+            toLocation: 'Hyderabad Ring',
+            additionalDrops: [],
+            route: 'Nagpur Depot -> Hyderabad Ring',
+            totalRent: 55000,
+            commissionAmount: 0,
+            isTdsDeducted: true,
+            tdsAmount: 550,
+            advanceReceived: 30000,
+            receivedAmount: 0,
+            netRent: 54450,
+            driverCommission: 8167.5,
+            balancePending: 24450,
+            notes: 'Demo trip - bulk goods transport',
+            isSimulation: true
+          },
+          {
+            id: `trp-sim-${Date.now()}-3`,
+            profileId: activeProfileId,
+            date: getRelDate(5),
+            truckId: simTrucks[2].id,
+            companyName: simCompanies[2].name,
+            driverName: simDrivers[2].name,
+            fromLocation: 'Delhi ICD',
+            toLocation: 'Jaipur RIICO',
+            additionalDrops: [],
+            route: 'Delhi ICD -> Jaipur RIICO',
+            totalRent: 38000,
+            commissionAmount: 500,
+            isTdsDeducted: false,
+            tdsAmount: 0,
+            advanceReceived: 15000,
+            receivedAmount: 0,
+            netRent: 37500,
+            driverCommission: 5625,
+            balancePending: 22500,
+            notes: 'Demo trip - electronics cargo',
+            isSimulation: true
+          }
+        ];
+        const simExpenses = [
+          { id: `exp-sim-${Date.now()}-1`, profileId: activeProfileId, date: getRelDate(1), truckId: simTrucks[0].id, category: 'DIESEL', amount: 14000, paymentMethod: 'Fleet Card', notes: 'Diesel refill at Express Highway', isSimulation: true },
+          { id: `exp-sim-${Date.now()}-2`, profileId: activeProfileId, date: getRelDate(2), truckId: simTrucks[0].id, category: 'TOLL', amount: 1850, paymentMethod: 'FASTag', notes: 'Toll plaza debit', isSimulation: true },
+          { id: `exp-sim-${Date.now()}-3`, profileId: activeProfileId, date: getRelDate(3), truckId: simTrucks[1].id, category: 'DIESEL', amount: 19500, paymentMethod: 'Fleet Card', notes: 'Full tank fuel fill', isSimulation: true },
+          { id: `exp-sim-${Date.now()}-4`, profileId: activeProfileId, date: getRelDate(4), truckId: simTrucks[2].id, category: 'MAINTENANCE', amount: 3500, paymentMethod: 'UPI', notes: 'Tire inspection & grease', isSimulation: true }
+        ];
+        const simDriverPayments = [
+          { id: `dp-sim-${Date.now()}-1`, profileId: activeProfileId, date: getRelDate(1), driverName: simDrivers[0].name, type: 'SALARY_PAYOUT', amount: 5000, paymentMethod: 'UPI', description: 'Weekly trip advance payout', isSimulation: true },
+          { id: `dp-sim-${Date.now()}-2`, profileId: activeProfileId, date: getRelDate(2), driverName: simDrivers[0].name, type: 'DRIVER_EXPENSE', amount: 800, description: 'Loading tea / toll petty cash', isSimulation: true },
+          { id: `dp-sim-${Date.now()}-3`, profileId: activeProfileId, date: getRelDate(3), driverName: simDrivers[1].name, type: 'SALARY_PAYOUT', amount: 6000, paymentMethod: 'Cash', description: 'Advance handed at loading point', isSimulation: true }
+        ];
+        const simSettlements = [
+          { id: `set-sim-${Date.now()}-1`, profileId: activeProfileId, date: getRelDate(1), companyName: simCompanies[0].name, amount: 10000, paymentMethod: 'NEFT', referenceNumber: 'NEFT-SIM-88910', notes: 'Part clearance of Mumbai invoice', isSimulation: true }
+        ];
+
+        setTrucks(prev => [...simTrucks, ...prev]);
+        setCompanies(prev => [...simCompanies, ...prev]);
+        setDrivers(prev => [...simDrivers, ...prev]);
+        setTrips(prev => [...simTrips, ...prev]);
+        setExpenses(prev => [...simExpenses, ...prev]);
+        setDriverPayments(prev => [...simDriverPayments, ...prev]);
+        setSettlements(prev => [...simSettlements, ...prev]);
+
+        if (storageMode === 'cloud' && supabaseClient) {
+          try {
+            await supabaseClient.from('trucks').upsert(simTrucks.map(toSnakeObj));
+            await supabaseClient.from('companies').upsert(simCompanies.map(toSnakeObj));
+            await supabaseClient.from('drivers').upsert(simDrivers.map(toSnakeObj));
+            await supabaseClient.from('trips').upsert(simTrips.map(toSnakeObj));
+            await supabaseClient.from('expenses').upsert(simExpenses.map(toSnakeObj));
+            await supabaseClient.from('driver_payments').upsert(simDriverPayments.map(toSnakeObj));
+            await supabaseClient.from('settlements').upsert(simSettlements.map(toSnakeObj));
+          } catch (e) {
+            console.warn('Simulation cloud sync warning:', e);
+          }
+        }
+
+        return {
+          trucksCount: simTrucks.length,
+          tripsCount: simTrips.length,
+          expensesCount: simExpenses.length
+        };
+      };
+
+      // Wipe simulation/demo data only (preserves real business data)
+      const wipeSimulationData = async () => {
+        setTrucks(prev => prev.filter(x => !x.isSimulation));
+        setCompanies(prev => prev.filter(x => !x.isSimulation));
+        setDrivers(prev => prev.filter(x => !x.isSimulation));
+        setTrips(prev => prev.filter(x => !x.isSimulation));
+        setExpenses(prev => prev.filter(x => !x.isSimulation));
+        setDriverPayments(prev => prev.filter(x => !x.isSimulation));
+        setSettlements(prev => prev.filter(x => !x.isSimulation));
+
+        if (storageMode === 'cloud' && supabaseClient) {
+          try {
+            await Promise.all([
+              supabaseClient.from('trips').delete().eq('is_simulation', true),
+              supabaseClient.from('expenses').delete().eq('is_simulation', true),
+              supabaseClient.from('driver_payments').delete().eq('is_simulation', true),
+              supabaseClient.from('settlements').delete().eq('is_simulation', true),
+              supabaseClient.from('trucks').delete().eq('is_simulation', true),
+              supabaseClient.from('companies').delete().eq('is_simulation', true),
+              supabaseClient.from('drivers').delete().eq('is_simulation', true),
+            ]);
+          } catch (e) {
+            console.error('Error wiping simulation data from cloud:', e);
+            throw e;
+          }
+        }
+      };
+
       // Date Filtering
       const isDateInRange = (dateStr) => {
         if (dateFilter.preset === 'all') return true;
@@ -606,10 +955,10 @@
         );
 
         if (!scopedCompanies.some(c => c.name.toLowerCase() === input.companyName.trim().toLowerCase())) {
-          setCompanies(prev => [...prev, { id: `cmp-${Date.now()}`, profileId: activeProfileId, name: input.companyName.trim() }]);
+          addCompany({ name: input.companyName.trim() });
         }
         if (!scopedDrivers.some(d => d.name.toLowerCase() === input.driverName.trim().toLowerCase())) {
-          setDrivers(prev => [...prev, { id: `drv-${Date.now()}`, profileId: activeProfileId, name: input.driverName.trim(), phone: 'Pending', licenseNumber: 'Pending' }]);
+          addDriver({ name: input.driverName.trim(), phone: 'Pending', licenseNumber: 'Pending' });
         }
 
         const drops = (input.additionalDrops || []).filter(Boolean);
@@ -636,13 +985,18 @@
           driverCommission,
           balancePending,
           notes: input.notes,
+          isSimulation: Boolean(input.isSimulation)
         };
 
         setTrips(prev => [newTrip, ...prev]);
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('trips').upsert(toSnakeObj(newTrip)).catch(e => console.warn('Cloud trip insert error:', e));
+        }
         return newTrip;
       };
 
       const updateTrip = (id, updates) => {
+        let updatedItem = null;
         setTrips(prev => prev.map(t => {
           if (t.id !== id) return t;
           const merged = { ...t, ...updates };
@@ -652,11 +1006,20 @@
           );
           const drops = (merged.additionalDrops || []).filter(Boolean);
           const route = [merged.fromLocation, ...drops, merged.toLocation].filter(Boolean).join(' -> ');
-          return { ...merged, route: route || merged.route, receivedAmount: recAmt, tdsAmount, netRent, driverCommission, balancePending };
+          updatedItem = { ...merged, route: route || merged.route, receivedAmount: recAmt, tdsAmount, netRent, driverCommission, balancePending };
+          return updatedItem;
         }));
+        if (storageMode === 'cloud' && supabaseClient && updatedItem) {
+          supabaseClient.from('trips').update(toSnakeObj(updatedItem)).eq('id', id).catch(e => console.warn('Cloud trip update error:', e));
+        }
       };
 
-      const deleteTrip = (id) => setTrips(prev => prev.filter(t => t.id !== id));
+      const deleteTrip = (id) => {
+        setTrips(prev => prev.filter(t => t.id !== id));
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('trips').delete().eq('id', id).catch(e => console.warn('Cloud trip delete error:', e));
+        }
+      };
 
       // Expense Actions
       const addTruckExpense = (input) => {
@@ -671,12 +1034,26 @@
           amount: Number(input.amount) || 0,
           paymentMethod: input.paymentMethod,
           notes: input.notes,
+          isSimulation: Boolean(input.isSimulation)
         };
         setExpenses(prev => [newExp, ...prev]);
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('expenses').upsert(toSnakeObj(newExp)).catch(e => console.warn('Cloud expense insert error:', e));
+        }
         return newExp;
       };
-      const updateTruckExpense = (id, updates) => setExpenses(prev => prev.map(e => e.id === id ? { ...e, ...updates, amount: Number(updates.amount ?? e.amount) } : e));
-      const deleteTruckExpense = (id) => setExpenses(prev => prev.filter(e => e.id !== id));
+      const updateTruckExpense = (id, updates) => {
+        setExpenses(prev => prev.map(e => e.id === id ? { ...e, ...updates, amount: Number(updates.amount ?? e.amount) } : e));
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('expenses').update(toSnakeObj(updates)).eq('id', id).catch(e => console.warn('Cloud expense update error:', e));
+        }
+      };
+      const deleteTruckExpense = (id) => {
+        setExpenses(prev => prev.filter(e => e.id !== id));
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('expenses').delete().eq('id', id).catch(e => console.warn('Cloud expense delete error:', e));
+        }
+      };
 
       // Driver Payment Actions
       const addDriverPayment = (input) => {
@@ -692,12 +1069,26 @@
           amount: Number(input.amount) || 0,
           paymentMethod: input.paymentMethod,
           description: input.description,
+          isSimulation: Boolean(input.isSimulation)
         };
         setDriverPayments(prev => [newDp, ...prev]);
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('driver_payments').upsert(toSnakeObj(newDp)).catch(e => console.warn('Cloud driver payment insert error:', e));
+        }
         return newDp;
       };
-      const updateDriverPayment = (id, updates) => setDriverPayments(prev => prev.map(p => p.id === id ? { ...p, ...updates, amount: Number(updates.amount ?? p.amount) } : p));
-      const deleteDriverPayment = (id) => setDriverPayments(prev => prev.filter(p => p.id !== id));
+      const updateDriverPayment = (id, updates) => {
+        setDriverPayments(prev => prev.map(p => p.id === id ? { ...p, ...updates, amount: Number(updates.amount ?? p.amount) } : p));
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('driver_payments').update(toSnakeObj(updates)).eq('id', id).catch(e => console.warn('Cloud driver payment update error:', e));
+        }
+      };
+      const deleteDriverPayment = (id) => {
+        setDriverPayments(prev => prev.filter(p => p.id !== id));
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('driver_payments').delete().eq('id', id).catch(e => console.warn('Cloud driver payment delete error:', e));
+        }
+      };
 
       // Settlement Actions
       const addSettlement = (input) => {
@@ -710,20 +1101,42 @@
           paymentMethod: input.paymentMethod,
           referenceNumber: input.referenceNumber,
           notes: input.notes,
+          isSimulation: Boolean(input.isSimulation)
         };
         setSettlements(prev => [newSt, ...prev]);
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('settlements').upsert(toSnakeObj(newSt)).catch(e => console.warn('Cloud settlement insert error:', e));
+        }
         return newSt;
       };
-      const updateSettlement = (id, updates) => setSettlements(prev => prev.map(s => s.id === id ? { ...s, ...updates, amount: Number(updates.amount ?? s.amount) } : s));
-      const deleteSettlement = (id) => setSettlements(prev => prev.filter(s => s.id !== id));
+      const updateSettlement = (id, updates) => {
+        setSettlements(prev => prev.map(s => s.id === id ? { ...s, ...updates, amount: Number(updates.amount ?? s.amount) } : s));
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('settlements').update(toSnakeObj(updates)).eq('id', id).catch(e => console.warn('Cloud settlement update error:', e));
+        }
+      };
+      const deleteSettlement = (id) => {
+        setSettlements(prev => prev.filter(s => s.id !== id));
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('settlements').delete().eq('id', id).catch(e => console.warn('Cloud settlement delete error:', e));
+        }
+      };
 
       // Master Entity Actions (with cascading)
       const addTruck = (input) => {
-        const newT = { id: `trk-${Date.now()}`, profileId: activeProfileId, ...input };
+        const newT = { id: `trk-${Date.now()}`, profileId: activeProfileId, ...input, isSimulation: Boolean(input.isSimulation) };
         setTrucks(prev => [...prev, newT]);
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('trucks').upsert(toSnakeObj(newT)).catch(e => console.warn('Cloud truck insert error:', e));
+        }
         return newT;
       };
-      const updateTruck = (id, fields) => setTrucks(prev => prev.map(t => t.id === id ? { ...t, ...fields } : t));
+      const updateTruck = (id, fields) => {
+        setTrucks(prev => prev.map(t => t.id === id ? { ...t, ...fields } : t));
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('trucks').update(toSnakeObj(fields)).eq('id', id).catch(e => console.warn('Cloud truck update error:', e));
+        }
+      };
       const deleteTruck = (id) => {
         if (trips.some(t => t.truckId === id) || expenses.some(e => e.truckId === id)) {
           if (!confirm('This truck has associated trips or expenses. Deleting it will delete them as well. Continue?')) return;
@@ -731,11 +1144,17 @@
           setExpenses(prev => prev.filter(e => e.truckId !== id));
         }
         setTrucks(prev => prev.filter(t => t.id !== id));
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('trucks').delete().eq('id', id).catch(e => console.warn('Cloud truck delete error:', e));
+        }
       };
 
       const addCompany = (input) => {
-        const newC = { id: `cmp-${Date.now()}`, profileId: activeProfileId, ...input };
+        const newC = { id: `cmp-${Date.now()}`, profileId: activeProfileId, ...input, isSimulation: Boolean(input.isSimulation) };
         setCompanies(prev => [...prev, newC]);
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('companies').upsert(toSnakeObj(newC)).catch(e => console.warn('Cloud company insert error:', e));
+        }
         return newC;
       };
       const updateCompany = (id, fields) => {
@@ -746,6 +1165,9 @@
           setSettlements(prev => prev.map(s => s.companyName === old.name ? { ...s, companyName: fields.name } : s));
         }
         setCompanies(prev => prev.map(c => c.id === id ? { ...c, ...fields } : c));
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('companies').update(toSnakeObj(fields)).eq('id', id).catch(e => console.warn('Cloud company update error:', e));
+        }
       };
       const deleteCompany = (id) => {
         const old = companies.find(c => c.id === id);
@@ -757,11 +1179,17 @@
           }
         }
         setCompanies(prev => prev.filter(c => c.id !== id));
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('companies').delete().eq('id', id).catch(e => console.warn('Cloud company delete error:', e));
+        }
       };
 
       const addDriver = (input) => {
-        const newD = { id: `drv-${Date.now()}`, profileId: activeProfileId, ...input, status: 'ACTIVE' };
+        const newD = { id: `drv-${Date.now()}`, profileId: activeProfileId, ...input, status: 'ACTIVE', isSimulation: Boolean(input.isSimulation) };
         setDrivers(prev => [...prev, newD]);
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('drivers').upsert(toSnakeObj(newD)).catch(e => console.warn('Cloud driver insert error:', e));
+        }
         return newD;
       };
       const updateDriver = (id, fields) => {
@@ -772,6 +1200,9 @@
           setDriverPayments(prev => prev.map(p => p.driverName === old.name ? { ...p, driverName: fields.name } : p));
         }
         setDrivers(prev => prev.map(d => d.id === id ? { ...d, ...fields } : d));
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('drivers').update(toSnakeObj(fields)).eq('id', id).catch(e => console.warn('Cloud driver update error:', e));
+        }
       };
       const deleteDriver = (id) => {
         const old = drivers.find(d => d.id === id);
@@ -783,6 +1214,9 @@
           }
         }
         setDrivers(prev => prev.filter(d => d.id !== id));
+        if (storageMode === 'cloud' && supabaseClient) {
+          supabaseClient.from('drivers').delete().eq('id', id).catch(e => console.warn('Cloud driver delete error:', e));
+        }
       };
 
       const getTruckReg = (idOrReg) => {
@@ -1180,6 +1614,11 @@
           getTruckReg, getCompanyName, getDriverName,
           getTripExpenses, getTripReimbursable, getTripBalancePending, getTripProfit,
           clearAllUserData,
+          storageMode, setStorageMode,
+          cloudSyncStatus,
+          simulationStats,
+          pullCloudData, syncLocalToCloud,
+          generateSimulationData, wipeSimulationData,
         }}>
           {children}
         </FleetContext.Provider>
@@ -3961,7 +4400,12 @@
         activeRules, updateRules, activeProfile,
         activeEmailConfig, updateEmailSyncConfig, syncExpensesFromEmails, syncFromLiveGmail,
         clearAllUserData,
-        changePassword
+        changePassword,
+        storageMode, setStorageMode,
+        cloudSyncStatus,
+        simulationStats,
+        pullCloudData, syncLocalToCloud,
+        generateSimulationData, wipeSimulationData,
       } = useFleet();
 
       const [subTab, setSubTab] = useState('trucks');
@@ -3969,6 +4413,11 @@
       const [showClearModal, setShowClearModal] = useState(false);
       const [clearWipeMasters, setClearWipeMasters] = useState(false);
       const [clearConfirmed, setClearConfirmed] = useState(false);
+
+      // Cloud Database & Demo Mode Management State
+      const [dbActionStatus, setDbActionStatus] = useState(null);
+      const [dbActionLoading, setDbActionLoading] = useState(false);
+      const [showWipeSimModal, setShowWipeSimModal] = useState(false);
 
       // Account & Security Password Change State
       const [curPass, setCurPass] = useState('');
@@ -4362,6 +4811,7 @@
                 { id: 'drivers', label: `Driver Master (${drivers.length})`, icon: '👨‍✈️' },
                 { id: 'rules', label: 'Rules & Formulas', icon: '⚙️' },
                 { id: 'email_sync', label: 'Email Expense Sync', icon: '✉️' },
+                { id: 'cloud_db', label: 'Cloud DB & Storage', icon: '☁️' },
                 { id: 'security', label: 'Account & Security', icon: '🔑' },
                 { id: 'data_erasure', label: 'Privacy & Data Erasure', icon: '🗑️' },
               ].map(st => (
@@ -4378,7 +4828,7 @@
               ))}
             </div>
 
-            {subTab !== 'rules' && subTab !== 'email_sync' && subTab !== 'security' && subTab !== 'data_erasure' && (
+            {subTab !== 'rules' && subTab !== 'email_sync' && subTab !== 'cloud_db' && subTab !== 'security' && subTab !== 'data_erasure' && (
               <div className="flex items-center gap-2">
                 <input
                   type="text"
@@ -4997,6 +5447,337 @@
                   </div>
                 </form>
               </div>
+            </div>
+          {/* SUBTAB: CLOUD DATABASE & OFFLINE DEMO SANDBOX */}
+          {subTab === 'cloud_db' && (
+            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6 animate-fadeIn">
+              {/* Header Title */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <span className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400">☁️</span>
+                    Cloud Database & Offline Mode Settings
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Manage your PostgreSQL database in Supabase and toggle between Live Cloud DB and Offline Demo Sandbox.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs px-3 py-1 rounded-full border font-bold flex items-center gap-1.5 ${
+                    storageMode === 'cloud'
+                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                      : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                  }`}>
+                    <span className={`w-2 h-2 rounded-full ${storageMode === 'cloud' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+                    <span>{storageMode === 'cloud' ? '🟢 Live Cloud DB' : '🟡 Offline Demo Sandbox'}</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Action Feedback Banner */}
+              {dbActionStatus && (
+                <div className={`p-4 rounded-xl border text-xs font-semibold flex items-center justify-between gap-2 animate-fadeIn ${
+                  dbActionStatus.type === 'success'
+                    ? 'bg-emerald-950/70 border-emerald-800 text-emerald-300'
+                    : 'bg-rose-950/70 border-rose-800 text-rose-300'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    <span>{dbActionStatus.type === 'success' ? '✅' : '⚠️'}</span>
+                    <span>{dbActionStatus.message}</span>
+                  </div>
+                  <button onClick={() => setDbActionStatus(null)} className="text-slate-400 hover:text-white text-xs">✕</button>
+                </div>
+              )}
+
+              {/* 1. Storage Mode Toggle Selector */}
+              <div>
+                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2.5">
+                  1. Active Storage & Operation Mode
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Option A: Live Cloud */}
+                  <div
+                    onClick={() => {
+                      setStorageMode('cloud');
+                      setDbActionStatus({ type: 'success', message: 'Switched to 🟢 Live Cloud Database (Supabase PostgreSQL).' });
+                    }}
+                    className={`p-4 rounded-2xl border cursor-pointer transition relative ${
+                      storageMode === 'cloud'
+                        ? 'bg-emerald-950/40 border-emerald-500 ring-1 ring-emerald-500/50 shadow-lg shadow-emerald-500/10'
+                        : 'bg-slate-950/50 border-slate-800 hover:border-slate-700 opacity-75'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg">☁️</span>
+                        <span className="text-sm font-bold text-white">Live Cloud Database</span>
+                      </div>
+                      {storageMode === 'cloud' && (
+                        <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded bg-emerald-500 text-slate-950">Active Mode</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed mb-3">
+                      Entries are securely synced to your PostgreSQL database on Supabase (<code className="text-emerald-400 font-mono">vdmfymirrdkebnwlgnqz</code>). Changes are visible across all devices and team members.
+                    </p>
+                    <div className="text-[11px] font-semibold text-emerald-400 flex items-center gap-1.5">
+                      <span>✓ Multi-device persistent</span>
+                      <span className="text-slate-600">•</span>
+                      <span>✓ Row Level Security</span>
+                    </div>
+                  </div>
+
+                  {/* Option B: Offline Sandbox */}
+                  <div
+                    onClick={() => {
+                      setStorageMode('demo');
+                      setDbActionStatus({ type: 'success', message: 'Switched to 🟡 Offline Demo Sandbox (Local Mode).' });
+                    }}
+                    className={`p-4 rounded-2xl border cursor-pointer transition relative ${
+                      storageMode === 'demo'
+                        ? 'bg-amber-950/40 border-amber-500 ring-1 ring-amber-500/50 shadow-lg shadow-amber-500/10'
+                        : 'bg-slate-950/50 border-slate-800 hover:border-slate-700 opacity-75'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg">💻</span>
+                        <span className="text-sm font-bold text-white">Offline Demo Sandbox</span>
+                      </div>
+                      {storageMode === 'demo' && (
+                        <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded bg-amber-500 text-slate-950">Active Mode</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed mb-3">
+                      Data is stored purely in browser local storage. No network calls are sent to your cloud database. Perfect for safe experimentation, training, and working completely offline.
+                    </p>
+                    <div className="text-[11px] font-semibold text-amber-400 flex items-center gap-1.5">
+                      <span>✓ Zero network dependency</span>
+                      <span className="text-slate-600">•</span>
+                      <span>✓ Cloud data isolated</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. Cloud Database Connection Info */}
+              <div className="bg-slate-950/70 p-4 rounded-2xl border border-slate-800 space-y-3">
+                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                  2. Supabase Connection Credentials & Status
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase">Project ID</span>
+                    <div className="font-mono text-emerald-400 font-bold mt-0.5">vdmfymirrdkebnwlgnqz</div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase">Cloud Endpoint</span>
+                    <div className="font-mono text-white truncate mt-0.5" title="https://vdmfymirrdkebnwlgnqz.supabase.co">https://vdmfymirrdkebnwlgnqz.supabase.co</div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase">Engine</span>
+                    <div className="text-slate-300 font-bold mt-0.5">PostgreSQL 15 (Supabase)</div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase">Connection Status</span>
+                    <div className="text-emerald-400 font-bold mt-0.5 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                      <span>Ready & Authenticated</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Demo / Simulation Data Sandbox Manager */}
+              <div className="bg-slate-950/60 p-5 rounded-2xl border border-slate-800 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                      <span>⚡</span> Demo / Simulation Fleet Data Sandbox
+                    </h4>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Generate realistic test trips, fuel expenses, and driver claims tagged as simulation. Wipe them anytime with 1 click without affecting real business data.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-300 font-bold font-mono">
+                      Simulation records: <strong className="text-amber-400">{simulationStats.totalSimCount}</strong>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Simulation Breakdown Pills */}
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
+                  <div className="bg-slate-900/80 p-2 rounded-xl border border-slate-800">
+                    <div className="font-mono font-bold text-white">{simulationStats.simTripsCount}</div>
+                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Demo Trips</div>
+                  </div>
+                  <div className="bg-slate-900/80 p-2 rounded-xl border border-slate-800">
+                    <div className="font-mono font-bold text-white">{simulationStats.simTrucksCount}</div>
+                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Demo Trucks</div>
+                  </div>
+                  <div className="bg-slate-900/80 p-2 rounded-xl border border-slate-800">
+                    <div className="font-mono font-bold text-white">{simulationStats.simExpCount}</div>
+                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Demo Expenses</div>
+                  </div>
+                  <div className="bg-slate-900/80 p-2 rounded-xl border border-slate-800">
+                    <div className="font-mono font-bold text-white">{simulationStats.simDpCount}</div>
+                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Demo Claims</div>
+                  </div>
+                  <div className="bg-slate-900/80 p-2 rounded-xl border border-slate-800">
+                    <div className="font-mono font-bold text-white">{simulationStats.simSetCount}</div>
+                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Demo Settlements</div>
+                  </div>
+                </div>
+
+                {/* Simulation Action Buttons */}
+                <div className="flex flex-wrap items-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    disabled={dbActionLoading}
+                    onClick={async () => {
+                      setDbActionLoading(true);
+                      setDbActionStatus(null);
+                      try {
+                        const res = await generateSimulationData();
+                        setDbActionStatus({
+                          type: 'success',
+                          message: `Generated realistic demo fleet data: ${res.tripsCount} trips, ${res.trucksCount} trucks, and ${res.expensesCount} expenses!`
+                        });
+                      } catch (err) {
+                        setDbActionStatus({ type: 'error', message: err.message || 'Failed to generate demo data.' });
+                      } finally {
+                        setDbActionLoading(false);
+                      }
+                    }}
+                    className="px-4 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs rounded-xl shadow-md transition flex items-center gap-2"
+                  >
+                    <span>⚡</span>
+                    <span>{dbActionLoading ? 'Generating...' : 'Generate Demo Fleet Data'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={dbActionLoading || simulationStats.totalSimCount === 0}
+                    onClick={() => setShowWipeSimModal(true)}
+                    className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
+                      simulationStats.totalSimCount > 0
+                        ? 'bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-700/60 shadow-md'
+                        : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed opacity-50'
+                    }`}
+                  >
+                    <span>🗑️</span>
+                    <span>Wipe Simulation Data Only ({simulationStats.totalSimCount})</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 4. Data Migration & Sync Controls */}
+              <div className="bg-slate-950/60 p-5 rounded-2xl border border-slate-800 space-y-3">
+                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                  3. Cloud Migration & Sync Tools
+                </h4>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Easily migrate your existing local records to the Supabase Cloud or pull the latest cloud state onto this device.
+                </p>
+                <div className="flex flex-wrap items-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    disabled={dbActionLoading}
+                    onClick={async () => {
+                      setDbActionLoading(true);
+                      setDbActionStatus(null);
+                      try {
+                        await syncLocalToCloud();
+                        setDbActionStatus({
+                          type: 'success',
+                          message: `Successfully pushed all local fleet records to Supabase PostgreSQL database!`
+                        });
+                      } catch (err) {
+                        setDbActionStatus({ type: 'error', message: err.message || 'Failed to push data to cloud.' });
+                      } finally {
+                        setDbActionLoading(false);
+                      }
+                    }}
+                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center gap-2"
+                  >
+                    <span>☁️</span>
+                    <span>{dbActionLoading ? 'Pushing...' : 'Push Local Data to Cloud'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={dbActionLoading}
+                    onClick={async () => {
+                      setDbActionLoading(true);
+                      setDbActionStatus(null);
+                      try {
+                        await pullCloudData(activeProfileId);
+                        setDbActionStatus({
+                          type: 'success',
+                          message: `Successfully pulled fresh fleet records from Supabase Cloud!`
+                        });
+                      } catch (err) {
+                        setDbActionStatus({ type: 'error', message: err.message || 'Failed to pull data from cloud.' });
+                      } finally {
+                        setDbActionLoading(false);
+                      }
+                    }}
+                    className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs rounded-xl shadow-sm transition flex items-center gap-2"
+                  >
+                    <span>🔄</span>
+                    <span>{dbActionLoading ? 'Pulling...' : 'Pull Fresh from Cloud'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Wipe Simulation Modal */}
+              {showWipeSimModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
+                  <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl p-6 space-y-4">
+                    <div className="flex items-center gap-2 text-rose-400">
+                      <span className="text-xl">🗑️</span>
+                      <h3 className="font-bold text-white text-base">Wipe Simulation Data Only?</h3>
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      This will permanently delete the <strong>{simulationStats.totalSimCount} simulation records</strong> ({simulationStats.simTripsCount} trips, {simulationStats.simTrucksCount} trucks, {simulationStats.simExpCount} expenses) from both local state and Supabase Cloud.
+                    </p>
+                    <div className="p-3 bg-emerald-950/50 border border-emerald-800 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
+                      <span>🛡️</span>
+                      <span>All of your real business entries will remain 100% safe and intact.</span>
+                    </div>
+                    <div className="flex justify-end gap-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowWipeSimModal(false)}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setDbActionLoading(true);
+                          setShowWipeSimModal(false);
+                          try {
+                            await wipeSimulationData();
+                            setDbActionStatus({
+                              type: 'success',
+                              message: 'Successfully wiped all simulation records! Your real fleet data is preserved.'
+                            });
+                          } catch (err) {
+                            setDbActionStatus({ type: 'error', message: err.message || 'Failed to wipe simulation data.' });
+                          } finally {
+                            setDbActionLoading(false);
+                          }
+                        }}
+                        className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg"
+                      >
+                        Yes, Wipe Simulation Data
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -5935,9 +6716,120 @@
       );
     }
 
+    // --- MODAL: STORAGE MODE SWITCHER (CLOUD POSTGRESQL VS OFFLINE DEMO SANDBOX) ---
+    function StorageModeModal({ onClose, onOpenMastersDb }) {
+      const { storageMode, setStorageMode } = useFleet();
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl p-6 space-y-4">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400 text-lg">☁️</span>
+                <div>
+                  <h3 className="font-bold text-white text-base">Select Storage & Operation Mode</h3>
+                  <p className="text-[11px] text-slate-400">Switch between Live Cloud PostgreSQL & Offline Demo Sandbox</p>
+                </div>
+              </div>
+              <button onClick={onClose} className="text-slate-400 hover:text-white text-lg">✕</button>
+            </div>
+
+            <div className="space-y-3">
+              {/* Option 1: Live Cloud Database */}
+              <div
+                onClick={() => {
+                  setStorageMode('cloud');
+                  onClose();
+                }}
+                className={`p-4 rounded-2xl border cursor-pointer transition ${
+                  storageMode === 'cloud'
+                    ? 'bg-emerald-950/50 border-emerald-500 ring-1 ring-emerald-500/50 shadow-lg'
+                    : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">☁️</span>
+                    <span className="font-bold text-sm text-white">Live Cloud Database (PostgreSQL)</span>
+                  </div>
+                  {storageMode === 'cloud' && (
+                    <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded bg-emerald-500 text-slate-950">Active</span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed mb-2">
+                  All fleet transactions sync directly with your dedicated Supabase PostgreSQL cloud database (<span className="text-emerald-400 font-mono">vdmfymirrdkebnwlgnqz</span>). Your data is accessible from any computer or mobile browser.
+                </p>
+                <div className="text-[10px] text-emerald-400/90 font-semibold flex items-center gap-2">
+                  <span>● Multi-Device Sync</span>
+                  <span>● Cloud Persistence</span>
+                  <span>● PostgreSQL 15</span>
+                </div>
+              </div>
+
+              {/* Option 2: Offline Demo Sandbox */}
+              <div
+                onClick={() => {
+                  setStorageMode('demo');
+                  onClose();
+                }}
+                className={`p-4 rounded-2xl border cursor-pointer transition ${
+                  storageMode === 'demo'
+                    ? 'bg-amber-950/50 border-amber-500 ring-1 ring-amber-500/50 shadow-lg'
+                    : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">💻</span>
+                    <span className="font-bold text-sm text-white">Offline Demo Sandbox (Local Mode)</span>
+                  </div>
+                  {storageMode === 'demo' && (
+                    <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded bg-amber-500 text-slate-950">Active</span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed mb-2">
+                  Data operates strictly inside this browser's local sandbox without making any network calls to the cloud database. Perfect for sandbox testing, training staff, and working offline.
+                </p>
+                <div className="text-[10px] text-amber-400/90 font-semibold flex items-center gap-2">
+                  <span>● 100% Offline Capable</span>
+                  <span>● Zero Cloud Network Calls</span>
+                  <span>● Isolated Sandbox</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenMastersDb();
+                }}
+                className="text-xs text-amber-400 hover:text-amber-300 underline font-semibold flex items-center gap-1"
+              >
+                <span>⚙️ Open Cloud DB & Demo Data Manager</span>
+                <span>↗</span>
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     // --- MAIN APP COMPONENT ---
     function App() {
-      const { currentUser, logout, profiles, activeProfileId, setActiveProfileId, addProfile, updateProfile, deleteProfile, clearAllUserData } = useFleet();
+      const {
+        currentUser, logout, profiles, activeProfileId, setActiveProfileId,
+        addProfile, updateProfile, deleteProfile, clearAllUserData,
+        storageMode, setStorageMode, cloudSyncStatus
+      } = useFleet();
       const [activeTab, setActiveTab] = useState('home');
       const [showProfModal, setShowProfModal] = useState(false);
       const [newProfName, setNewProfName] = useState('');
@@ -5945,6 +6837,7 @@
       const [clearWipeMasters, setClearWipeMasters] = useState(false);
       const [clearConfirmed, setClearConfirmed] = useState(false);
       const [showChangePassModal, setShowChangePassModal] = useState(false);
+      const [showStorageModal, setShowStorageModal] = useState(false);
 
       // Authentication Gate: Render AuthScreen if user is not signed in
       if (!currentUser) {
@@ -6009,6 +6902,22 @@
                     <span className="hidden xl:inline">Password</span>
                   </button>
                 </div>
+
+                {/* Storage Mode Toggle Pill */}
+                <button
+                  type="button"
+                  onClick={() => setShowStorageModal(true)}
+                  title={storageMode === 'cloud' ? 'Live Cloud Database active (Supabase PostgreSQL). Click to switch modes.' : 'Offline Demo Mode active (Local Sandbox). Click to switch modes.'}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition shadow-sm ${
+                    storageMode === 'cloud'
+                      ? 'bg-emerald-950/70 border-emerald-600/50 text-emerald-300 hover:bg-emerald-900/60'
+                      : 'bg-amber-950/70 border-amber-600/50 text-amber-300 hover:bg-amber-900/60'
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${storageMode === 'cloud' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+                  <span>{storageMode === 'cloud' ? '🟢 Cloud DB' : '🟡 Demo Mode'}</span>
+                  <span className="text-[10px] opacity-75">▾</span>
+                </button>
 
                 {/* Profile Switcher */}
                 <div className="flex items-center bg-slate-800/90 border border-slate-700 rounded-xl p-1 shadow-sm">
@@ -6221,6 +7130,15 @@
           )}
 
           {showChangePassModal && <ChangePasswordModal onClose={() => setShowChangePassModal(false)} />}
+          {showStorageModal && (
+            <StorageModeModal
+              onClose={() => setShowStorageModal(false)}
+              onOpenMastersDb={() => {
+                setShowStorageModal(false);
+                setActiveTab('masters');
+              }}
+            />
+          )}
 
           <footer className="bg-slate-900 border-t border-slate-800/80 py-4 text-center text-xs text-slate-500">
             <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
