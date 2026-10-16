@@ -1158,7 +1158,24 @@
       const scopedCompanies = useMemo(() => companies.filter(c => c.profileId === activeProfileId), [companies, activeProfileId]);
       const scopedDrivers = useMemo(() => drivers.filter(d => d.profileId === activeProfileId), [drivers, activeProfileId]);
       const scopedTrips = useMemo(() => [...trips.filter(t => t.profileId === activeProfileId)].sort(compareRecordsDesc), [trips, activeProfileId]);
-      const scopedExpenses = useMemo(() => [...expenses.filter(e => e.profileId === activeProfileId)].sort(compareRecordsDesc), [expenses, activeProfileId]);
+      const scopedExpenses = useMemo(() => {
+        const list = expenses.filter(e => e.profileId === activeProfileId);
+        const seenEmailRefs = new Set();
+        const unique = [];
+        for (const e of list) {
+          const refMatch = (e.notes || '').match(/\[ref:([^\]]+)\]/);
+          const emailRef = e.sourceEmailId || (refMatch ? refMatch[1] : null);
+          const comboKey = emailRef
+            ? `ref:${emailRef}`
+            : (e.paymentMethod && e.paymentMethod.includes('Auto-Email') ? `${e.truckId}-${e.date}-${e.category}-${Number(e.amount)}` : null);
+          if (comboKey) {
+            if (seenEmailRefs.has(comboKey)) continue;
+            seenEmailRefs.add(comboKey);
+          }
+          unique.push(e);
+        }
+        return unique.sort(compareRecordsDesc);
+      }, [expenses, activeProfileId]);
       const scopedDriverPayments = useMemo(() => [...driverPayments.filter(p => p.profileId === activeProfileId)].sort(compareRecordsDesc), [driverPayments, activeProfileId]);
       const scopedSettlements = useMemo(() => [...settlements.filter(s => s.profileId === activeProfileId)].sort(compareRecordsDesc), [settlements, activeProfileId]);
 
@@ -1217,7 +1234,35 @@
               });
               setTrips(prev => [...mappedTrips, ...prev.filter(x => x.profileId !== targetProf)]);
             }
-            if (expRes.data) setExpenses(prev => [...expRes.data.map(toCamelObj), ...prev.filter(x => x.profileId !== targetProf)]);
+            if (expRes.data) {
+              const cloudExpenses = expRes.data.map(toCamelObj);
+              const seenEmailRefs = new Set();
+              const uniqueCloudExpenses = [];
+              const duplicateIdsToDelete = [];
+
+              for (const e of cloudExpenses) {
+                const refMatch = (e.notes || '').match(/\[ref:([^\]]+)\]/);
+                const emailRef = e.sourceEmailId || (refMatch ? refMatch[1] : null);
+                const comboKey = emailRef
+                  ? `ref:${emailRef}`
+                  : (e.paymentMethod && e.paymentMethod.includes('Auto-Email') ? `${e.truckId}-${e.date}-${e.category}-${Number(e.amount)}` : null);
+                if (comboKey) {
+                  if (seenEmailRefs.has(comboKey)) {
+                    duplicateIdsToDelete.push(e.id);
+                    continue; // Skip duplicate email record
+                  }
+                  seenEmailRefs.add(comboKey);
+                }
+                uniqueCloudExpenses.push(e);
+              }
+
+              // Auto-purge any duplicate email records from Supabase cloud database
+              if (duplicateIdsToDelete.length > 0 && supabaseClient) {
+                safeCloudExec(supabaseClient.from('expenses').delete().in('id', duplicateIdsToDelete), 'PurgeDuplicateEmailExpenses');
+              }
+
+              setExpenses(prev => [...uniqueCloudExpenses, ...prev.filter(x => x.profileId !== targetProf)]);
+            }
             if (dpRes.data) setDriverPayments(prev => [...dpRes.data.map(toCamelObj), ...prev.filter(x => x.profileId !== targetProf)]);
             if (setRes.data) setSettlements(prev => [...setRes.data.map(toCamelObj), ...prev.filter(x => x.profileId !== targetProf)]);
             if (rulRes.data && rulRes.data.length > 0) {
@@ -1980,12 +2025,17 @@
           const truckTripsDesc = scopedTrips.filter(t => t.truckId === targetTruckId);
           const ongoingTrip = truckTripsDesc.find(t => t.date <= mailDate);
 
+          const deterministicId = mail.id ? `exp-gmail-${mail.id}` : `exp-auto-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+          const curExpenses = expensesRef?.current || expenses || [];
+
           // Duplicate Guard: check existing ledger and newly parsed batch
-          const isDuplicate = expenses.some(e =>
+          const isDuplicate = curExpenses.some(e =>
+            (e.id === deterministicId) ||
             (mail.id && e.sourceEmailId === mail.id) ||
             (mail.id && e.notes && e.notes.includes(mail.id)) ||
             (e.truckId === targetTruckId && e.date === mailDate && Number(e.amount) === Number(amount) && e.category === category)
           ) || newExpensesCreated.some(e =>
+            (e.id === deterministicId) ||
             (mail.id && e.sourceEmailId === mail.id) ||
             (mail.id && e.notes && e.notes.includes(mail.id)) ||
             (e.truckId === targetTruckId && e.date === mailDate && Number(e.amount) === Number(amount) && e.category === category)
@@ -2001,7 +2051,7 @@
             : `Diesel Fuel - ${targetTruckReg}`;
 
           const newExp = {
-            id: `exp-auto-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            id: deterministicId,
             profileId: activeProfileId,
             date: mailDate,
             createdAt: new Date().toISOString(),
@@ -2022,7 +2072,12 @@
         });
 
         if (newExpensesCreated.length > 0) {
-          setExpenses(prev => [...newExpensesCreated, ...prev]);
+          setExpenses(prev => {
+            const newIds = new Set(newExpensesCreated.map(e => e.id));
+            const newRefs = new Set(newExpensesCreated.map(e => e.sourceEmailId).filter(Boolean));
+            const filteredPrev = prev.filter(e => !newIds.has(e.id) && !(e.sourceEmailId && newRefs.has(e.sourceEmailId)));
+            return [...newExpensesCreated, ...filteredPrev];
+          });
           if (supabaseClient && currentUser && !currentUser.isDemo) {
             const dbPayloads = newExpensesCreated.map(e => ({
               id: e.id,
@@ -2110,16 +2165,20 @@
         // Track already processed IDs in localStorage to avoid duplicates
         const processedSet = new Set(JSON.parse(localStorage.getItem('fleet_processed_gmail_msg_ids') || '[]'));
 
-        // Safety Reconcile: Only skip an email if it actually exists in the expenses ledger!
-        // This ensures emails that failed to insert into the cloud database during previous attempts get re-read and saved cleanly.
+        // Safety Reconcile: If an email already exists in the expenses ledger, skip it permanently
         const activeExpList = expensesRef?.current || expenses || [];
         const newMsgList = allFound.filter(m => {
-          if (!processedSet.has(m.id)) return true;
           const existsInLedger = activeExpList.some(e =>
+            (e.id && e.id === `exp-gmail-${m.id}`) ||
             (e.sourceEmailId && e.sourceEmailId === m.id) ||
             (e.notes && e.notes.includes(m.id))
           );
-          return !existsInLedger;
+          if (existsInLedger) {
+            processedSet.add(m.id);
+            return false;
+          }
+          if (processedSet.has(m.id)) return false;
+          return true;
         });
 
         if (newMsgList.length === 0) {
