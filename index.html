@@ -72,7 +72,7 @@
   </script>
 
   <script type="text/babel">
-    const { useState, useEffect, useMemo, createContext, useContext } = React;
+    const { useState, useEffect, useMemo, createContext, useContext, useRef, useCallback } = React;
 
     // --- SUPABASE CLOUD DATABASE CONFIGURATION ---
     const SUPABASE_CONFIG = {
@@ -1035,9 +1035,10 @@
       }, [emailSyncConfigs, activeProfileId, currentUser]);
 
       const updateEmailSyncConfig = (updates) => {
+        const merged = { ...(emailSyncConfigs[activeProfileId] || defaultEmailSyncConfig), ...updates };
         setEmailSyncConfigs(prev => ({
           ...prev,
-          [activeProfileId]: { ...(prev[activeProfileId] || defaultEmailSyncConfig), ...updates }
+          [activeProfileId]: merged
         }));
         if (updates.linkedEmail) {
           localStorage.setItem('fleet_google_email', updates.linkedEmail);
@@ -1047,6 +1048,16 @@
               safeCloudExec(supabaseClient.from('app_users').update({ email: updates.linkedEmail }).eq('id', currentUser.id), 'SyncLinkedEmail');
             }
           }
+        }
+        if (supabaseClient && currentUser && !currentUser.isDemo && activeProfileId) {
+          safeCloudExec(supabaseClient.from('email_sync_configs').upsert({
+            profile_id: activeProfileId,
+            linked_email: merged.linkedEmail || '',
+            toll_enabled: merged.tollEnabled ?? true,
+            toll_subject_filter: merged.tollSubjectFilter || '',
+            fuel_enabled: merged.fuelEnabled ?? true,
+            fuel_subject_filter: merged.fuelSubjectFilter || '',
+          }), 'SaveEmailSyncConfig');
         }
       };
 
@@ -1102,7 +1113,7 @@
         const targetProf = profId || activeProfileId;
         setCloudSyncStatus(prev => ({ ...prev, syncing: true, error: null }));
         try {
-          const [tRes, cRes, dRes, trRes, expRes, dpRes, setRes, rulRes] = await Promise.all([
+          const [tRes, cRes, dRes, trRes, expRes, dpRes, setRes, rulRes, cfgRes] = await Promise.all([
             supabaseClient.from('trucks').select('*').eq('profile_id', targetProf),
             supabaseClient.from('companies').select('*').eq('profile_id', targetProf),
             supabaseClient.from('drivers').select('*').eq('profile_id', targetProf),
@@ -1110,10 +1121,11 @@
             supabaseClient.from('expenses').select('*').eq('profile_id', targetProf).order('date', { ascending: false }),
             supabaseClient.from('driver_payments').select('*').eq('profile_id', targetProf).order('date', { ascending: false }),
             supabaseClient.from('settlements').select('*').eq('profile_id', targetProf).order('date', { ascending: false }),
-            supabaseClient.from('rules').select('*').eq('profile_id', targetProf)
+            supabaseClient.from('rules').select('*').eq('profile_id', targetProf),
+            supabaseClient.from('email_sync_configs').select('*').eq('profile_id', targetProf)
           ]);
 
-          const cloudHasData = (tRes.data && tRes.data.length > 0) || (trRes.data && trRes.data.length > 0) || (cRes.data && cRes.data.length > 0);
+          const cloudHasData = (tRes.data && tRes.data.length > 0) || (trRes.data && trRes.data.length > 0) || (cRes.data && cRes.data.length > 0) || (expRes.data && expRes.data.length > 0);
 
           if (cloudHasData) {
             if (tRes.data) setTrucks(prev => [...tRes.data.map(toCamelObj), ...prev.filter(x => x.profileId !== targetProf)]);
@@ -1154,6 +1166,23 @@
                   defaultTdsPercent: Number(r.default_tds_percent) || 1
                 }
               }));
+            }
+          }
+
+          if (cfgRes && cfgRes.data && cfgRes.data.length > 0) {
+            const c = cfgRes.data[0];
+            setEmailSyncConfigs(prev => ({
+              ...prev,
+              [targetProf]: {
+                linkedEmail: c.linked_email || prev[targetProf]?.linkedEmail || '',
+                tollEnabled: c.toll_enabled ?? true,
+                tollSubjectFilter: c.toll_subject_filter ?? '',
+                fuelEnabled: c.fuel_enabled ?? true,
+                fuelSubjectFilter: c.fuel_subject_filter ?? '',
+              }
+            }));
+            if (c.linked_email) {
+              localStorage.setItem('fleet_google_email', c.linked_email);
             }
           }
 
@@ -1913,7 +1942,8 @@
             amount: amount,
             paymentMethod: category === 'TOLL' ? 'FASTag (Auto-Email)' : 'Fleet Card (Auto-Email)',
             notes: basicNote,
-            sourceEmailId: mail.id
+            sourceEmailId: mail.id,
+            isSimulation: false
           };
 
           newExpensesCreated.push(newExp);
@@ -1923,8 +1953,21 @@
 
         if (newExpensesCreated.length > 0) {
           setExpenses(prev => [...newExpensesCreated, ...prev]);
-          if (storageMode === 'cloud' && supabaseClient) {
-            safeCloudExec(supabaseClient.from('expenses').upsert(newExpensesCreated.map(toSnakeObj)), 'AutoEmailExpenses');
+          if (supabaseClient && currentUser && !currentUser.isDemo) {
+            const dbPayloads = newExpensesCreated.map(e => ({
+              id: e.id,
+              profile_id: e.profileId,
+              truck_id: e.truckId,
+              trip_id: e.tripId || null,
+              date: e.date,
+              category: e.category,
+              amount: Number(e.amount) || 0,
+              payment_method: e.paymentMethod,
+              is_reimbursable: Boolean(e.isReimbursable),
+              notes: e.notes || '',
+              is_simulation: false
+            }));
+            safeCloudExec(supabaseClient.from('expenses').upsert(dbPayloads), 'AutoEmailExpenses');
           }
           updateEmailSyncConfig({ lastSyncedAt: new Date().toISOString() });
         }
@@ -2089,6 +2132,41 @@
         };
       };
 
+      // Automatic Background Gmail Scan Engine (runs whenever this browser has an active Google OAuth token)
+      useEffect(() => {
+        const token = localStorage.getItem('fleet_google_token');
+        const autoSyncEnabled = localStorage.getItem('fleet_auto_sync') !== 'false';
+        if (!token || !autoSyncEnabled || !currentUser || currentUser.isDemo) return;
+
+        const triggerAutoScan = async () => {
+          const currentToken = localStorage.getItem('fleet_google_token');
+          if (!currentToken) return;
+          try {
+            await syncFromLiveGmail(currentToken);
+          } catch (scanErr) {
+            console.debug('Background Gmail auto-scan note:', scanErr?.message);
+          }
+        };
+
+        // 1. Scan 5 seconds after app loads
+        const initialTimer = setTimeout(triggerAutoScan, 5000);
+
+        // 2. Scan every 45 seconds while tab is open
+        const intervalTimer = setInterval(triggerAutoScan, 45000);
+
+        // 3. Scan when returning to the tab
+        const onTabFocus = () => {
+          triggerAutoScan();
+        };
+        window.addEventListener('focus', onTabFocus);
+
+        return () => {
+          clearTimeout(initialTimer);
+          clearInterval(intervalTimer);
+          window.removeEventListener('focus', onTabFocus);
+        };
+      }, [currentUser, activeProfileId]);
+
       // Data Erasure / Clear Data (Right to be Forgotten & Privacy Compliance)
       const clearAllUserData = async (wipeMasters = false, allProfiles = false) => {
         // Erase directly from Supabase Cloud Database for real production accounts
@@ -2247,6 +2325,8 @@
           activeEmailConfig, updateEmailSyncConfig, syncExpensesFromEmails, syncFromLiveGmail,
           trucks: scopedTrucks, companies: scopedCompanies, drivers: scopedDrivers,
           trips: scopedTrips, expenses: scopedExpenses, driverPayments: scopedDriverPayments, settlements: scopedSettlements,
+          scopedTrucks, scopedCompanies, scopedDrivers,
+          scopedTrips, scopedExpenses, scopedDriverPayments, scopedSettlements,
           filteredTrips, filteredExpenses, filteredDriverPayments, filteredSettlements,
           summaryMetrics, dateFilter, setDateFilter, currency,
           addTrip, updateTrip, deleteTrip,
@@ -2388,7 +2468,12 @@
 
     // --- TRIP DETAILED SUMMARY & TRANSACTIONS BREAKDOWN MODAL ---
     function TripDetailModal({ trip, onClose }) {
-      const { scopedExpenses, scopedDriverPayments, getCompanyName, getTruckReg, getTripBalancePending, formatDate, formatCurr } = useFleet();
+      const {
+        expenses, scopedExpenses,
+        driverPayments, scopedDriverPayments,
+        getCompanyName, getTruckReg, getTripBalancePending,
+        formatDate, formatCurr
+      } = useFleet();
       if (!trip) return null;
 
       const compDisplay = getCompanyName ? getCompanyName(trip.companyName || trip.companyId) : (trip.companyName || trip.companyId);
@@ -2403,12 +2488,14 @@
       const tds = Number(trip.tdsAmount || 0);
       const drvSal = Number(trip.driverCommission || 0);
 
-      // Associated transactions
-      const directExpenses = (scopedExpenses || []).filter(e => e.tripId === trip.id);
+      // Associated transactions (safely match across all scoped expenses/driver payments by tripId)
+      const allExpenses = scopedExpenses || expenses || [];
+      const directExpenses = allExpenses.filter(e => e.tripId && String(e.tripId).trim() === String(trip.id).trim());
       const opDirectExp = directExpenses.filter(e => !e.isReimbursable).reduce((s, e) => s + Number(e.amount || 0), 0);
       const reimbDirectExp = directExpenses.filter(e => e.isReimbursable).reduce((s, e) => s + Number(e.amount || 0), 0);
 
-      const driverClaims = (scopedDriverPayments || []).filter(p => p.tripId === trip.id && p.type === 'DRIVER_EXPENSE');
+      const allPayments = scopedDriverPayments || driverPayments || [];
+      const driverClaims = allPayments.filter(p => p.tripId && String(p.tripId).trim() === String(trip.id).trim() && p.type === 'DRIVER_EXPENSE');
       const opDrvClaims = driverClaims.filter(p => !p.isReimbursable).reduce((s, p) => s + Number(p.amount || 0), 0);
       const reimbDrvClaims = driverClaims.filter(p => p.isReimbursable).reduce((s, p) => s + Number(p.amount || 0), 0);
 
