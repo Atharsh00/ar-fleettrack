@@ -341,6 +341,24 @@
       }
     };
 
+    const formatCurr = (val) => `₹ ${Number(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+    const formatDate = (val) => {
+      if (!val) return '-';
+      if (val instanceof Date) {
+        const d = String(val.getDate()).padStart(2, '0');
+        const m = String(val.getMonth() + 1).padStart(2, '0');
+        const y = val.getFullYear();
+        return `${d}-${m}-${y}`;
+      }
+      const str = String(val).trim();
+      const datePart = str.split('T')[0];
+      const parts = datePart.split('-');
+      if (parts.length === 3 && parts[0].length === 4) {
+        return `${parts[2]}-${parts[1]}-${parts[0]}`; // DD-MM-YYYY
+      }
+      return str;
+    };
+
     function FleetProvider({ children }) {
       const STORAGE_KEY = 'fleettrack_v4';
 
@@ -1008,14 +1026,28 @@
 
       // Email Sync Configuration Actions
       const activeEmailConfig = useMemo(() => {
-        return emailSyncConfigs[activeProfileId] || { ...defaultEmailSyncConfig };
-      }, [emailSyncConfigs, activeProfileId]);
+        const raw = emailSyncConfigs[activeProfileId] || { ...defaultEmailSyncConfig };
+        const effectiveEmail = raw.linkedEmail || currentUser?.email || localStorage.getItem('fleet_google_email') || '';
+        return {
+          ...raw,
+          linkedEmail: effectiveEmail
+        };
+      }, [emailSyncConfigs, activeProfileId, currentUser]);
 
       const updateEmailSyncConfig = (updates) => {
         setEmailSyncConfigs(prev => ({
           ...prev,
           [activeProfileId]: { ...(prev[activeProfileId] || defaultEmailSyncConfig), ...updates }
         }));
+        if (updates.linkedEmail) {
+          localStorage.setItem('fleet_google_email', updates.linkedEmail);
+          if (currentUser && !currentUser.isDemo) {
+            setCurrentUser(prev => prev ? ({ ...prev, email: updates.linkedEmail }) : prev);
+            if (supabaseClient) {
+              safeCloudExec(supabaseClient.from('app_users').update({ email: updates.linkedEmail }).eq('id', currentUser.id), 'SyncLinkedEmail');
+            }
+          }
+        }
       };
 
       const activeProfile = useMemo(() => scopedProfiles.find(p => p.id === activeProfileId) || scopedProfiles[0] || { id: 'prof-1', name: currentUser?.businessName || 'Default Entity' }, [scopedProfiles, activeProfileId, currentUser]);
@@ -2232,6 +2264,7 @@
           simulationStats,
           pullCloudData, syncLocalToCloud,
           generateSimulationData, wipeSimulationData,
+          formatCurr, formatDate,
         }}>
           {children}
         </FleetContext.Provider>
@@ -2239,23 +2272,6 @@
     }
 
     const useFleet = () => useContext(FleetContext);
-    const formatCurr = (val) => `₹ ${Number(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
-    const formatDate = (val) => {
-      if (!val) return '-';
-      if (val instanceof Date) {
-        const d = String(val.getDate()).padStart(2, '0');
-        const m = String(val.getMonth() + 1).padStart(2, '0');
-        const y = val.getFullYear();
-        return `${d}-${m}-${y}`;
-      }
-      const str = String(val).trim();
-      const datePart = str.split('T')[0];
-      const parts = datePart.split('-');
-      if (parts.length === 3 && parts[0].length === 4) {
-        return `${parts[2]}-${parts[1]}-${parts[0]}`; // DD-MM-YYYY
-      }
-      return str;
-    };
 
     // --- COMPONENT: SUMMARY CARDS ---
     function SummaryCards() {
@@ -5932,8 +5948,8 @@
       // Email Expense Sync State
       const DEFAULT_GOOGLE_CLIENT_ID = '371057355214-kc8o35sqpnopmth9rdtdsn4qllgj5fe3.apps.googleusercontent.com';
       const [googleToken, setGoogleToken] = useState(() => localStorage.getItem('fleet_google_token') || '');
-      const [googleEmail, setGoogleEmail] = useState(() => localStorage.getItem('fleet_google_email') || '');
-      const [syncEmail, setSyncEmail] = useState(activeEmailConfig?.linkedEmail || '');
+      const [googleEmail, setGoogleEmail] = useState(() => localStorage.getItem('fleet_google_email') || activeEmailConfig?.linkedEmail || currentUser?.email || '');
+      const [syncEmail, setSyncEmail] = useState(activeEmailConfig?.linkedEmail || currentUser?.email || '');
       const [syncTollEnabled, setSyncTollEnabled] = useState(activeEmailConfig?.tollEnabled ?? true);
       const [syncTollSubject, setSyncTollSubject] = useState(activeEmailConfig?.tollSubjectFilter ?? '');
       const [syncFuelEnabled, setSyncFuelEnabled] = useState(activeEmailConfig?.fuelEnabled ?? true);
@@ -5944,15 +5960,29 @@
       const [syncStatusMsg, setSyncStatusMsg] = useState(null);
       const [lastSyncTime, setLastSyncTime] = useState(null);
 
+      useEffect(() => {
+        const eff = activeEmailConfig?.linkedEmail || currentUser?.email || localStorage.getItem('fleet_google_email') || '';
+        if (eff) {
+          setSyncEmail(prev => prev || eff);
+          setGoogleEmail(prev => prev || eff);
+        }
+        if (activeEmailConfig) {
+          if (activeEmailConfig.tollSubjectFilter !== undefined) setSyncTollSubject(activeEmailConfig.tollSubjectFilter || '');
+          if (activeEmailConfig.fuelSubjectFilter !== undefined) setSyncFuelSubject(activeEmailConfig.fuelSubjectFilter || '');
+        }
+      }, [activeEmailConfig, currentUser]);
+
       const handleConnectGmail = () => {
         if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
           alert('Google Identity Services script is still loading. Please check your internet connection or refresh the page.');
           return;
         }
         try {
+          const effectiveHint = (syncEmail || googleEmail || activeEmailConfig?.linkedEmail || currentUser?.email || '').trim();
           const client = window.google.accounts.oauth2.initTokenClient({
             client_id: DEFAULT_GOOGLE_CLIENT_ID,
             scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify',
+            hint: effectiveHint || undefined,
             callback: async (tokenResponse) => {
               if (tokenResponse && tokenResponse.access_token) {
                 const token = tokenResponse.access_token;
@@ -5972,16 +6002,17 @@
                   console.warn('Could not fetch user email info:', e);
                 }
 
-                if (userEmailFound) {
-                  setGoogleEmail(userEmailFound);
-                  localStorage.setItem('fleet_google_email', userEmailFound);
-                  setSyncEmail(userEmailFound);
-                  updateEmailSyncConfig({ linkedEmail: userEmailFound });
+                const finalEmail = userEmailFound || effectiveHint || '';
+                if (finalEmail) {
+                  setGoogleEmail(finalEmail);
+                  localStorage.setItem('fleet_google_email', finalEmail);
+                  setSyncEmail(finalEmail);
+                  updateEmailSyncConfig({ linkedEmail: finalEmail });
                 }
 
                 setSyncStatusMsg({
                   error: false,
-                  text: `🎉 Successfully connected to Gmail! (${userEmailFound || 'Authorized'}) Auto-sync active.`
+                  text: `🎉 Successfully connected to Gmail! (${finalEmail || 'Authorized'}) Auto-sync active.`
                 });
               } else if (tokenResponse && tokenResponse.error) {
                 setSyncStatusMsg({
@@ -6324,77 +6355,125 @@
                       </div>
                     )}
 
-                    {/* Google OAuth Card */}
-                    <div className="bg-slate-800/40 border border-slate-700/80 rounded-xl p-4 space-y-3">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                          <span className="text-lg">🔵</span>
-                          <div>
-                            <span className="text-xs font-bold text-white block">Google Workspace / Gmail Account</span>
-                            <span className="text-[11px] text-slate-400">
-                              {googleToken ? `Authorized: ${googleEmail || 'Active Gmail Session'}` : 'Not connected yet'}
-                            </span>
-                          </div>
-                        </div>
+                    {/* Google OAuth & Account Linking Card */}
+                    {(() => {
+                      const effectiveLinked = (syncEmail || googleEmail || activeEmailConfig?.linkedEmail || currentUser?.email || '').trim();
+                      const isDeviceAuthorized = Boolean(googleToken);
 
-                        {!googleToken ? (
-                          <button
-                            type="button"
-                            onClick={handleConnectGmail}
-                            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs shadow transition flex items-center gap-1.5"
-                          >
-                            <span>🔵 Connect Gmail</span>
-                          </button>
-                        ) : (
-                          <div className="flex flex-wrap items-center gap-2">
-                            <button
-                              type="button"
-                              disabled={isSyncingGmail}
-                              onClick={handleSyncLiveGmail}
-                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs shadow transition flex items-center gap-1.5"
-                            >
-                              <span>{isSyncingGmail ? '⏳' : '🔄'}</span>
-                              <span>{isSyncingGmail ? 'Scanning...' : 'Scan Now'}</span>
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isSyncingGmail}
-                              onClick={handleForceRescan}
-                              className="px-3.5 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold rounded-xl text-xs transition flex items-center gap-1.5"
-                              title="Clears processed cache and scans Gmail alerts into the ledger"
-                            >
-                              <span>⚡</span>
-                              <span>Force Re-Scan</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={handleDisconnectGmail}
-                              className="px-3 py-1.5 bg-slate-800 hover:bg-rose-950/60 hover:text-rose-200 text-slate-400 font-semibold rounded-xl text-xs border border-slate-700 transition"
-                            >
-                              Disconnect
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                      return (
+                        <div className="bg-slate-800/40 border border-slate-700/80 rounded-xl p-4 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex items-center gap-2.5">
+                              <span className="text-2xl">🔵</span>
+                              <div>
+                                <span className="text-xs font-bold text-white block">Google Workspace / Gmail Account</span>
+                                {isDeviceAuthorized ? (
+                                  <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                                    <span>Authorized on this device: <strong>{googleEmail || effectiveLinked}</strong></span>
+                                  </span>
+                                ) : effectiveLinked ? (
+                                  <span className="text-[11px] text-amber-300 font-medium flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                                    <span>Linked Account: <strong>{effectiveLinked}</strong> (Needs 1-click authorization on this browser)</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-[11px] text-slate-400">Not connected yet</span>
+                                )}
+                              </div>
+                            </div>
 
-                      {googleToken && (
-                        <div className="pt-2 border-t border-slate-700/60 flex flex-wrap items-center justify-between text-[11px] text-slate-400">
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={autoSyncEnabled}
-                              onChange={(e) => {
-                                setAutoSyncEnabled(e.target.checked);
-                                localStorage.setItem('fleet_auto_sync', String(e.target.checked));
-                              }}
-                              className="rounded text-amber-500"
-                            />
-                            <span>Background auto-scan (every 45s while tab is active)</span>
-                          </label>
-                          <span>{lastSyncTime ? `Last scanned: ${lastSyncTime}` : 'Scan ready'}</span>
+                            {!isDeviceAuthorized ? (
+                              <button
+                                type="button"
+                                onClick={handleConnectGmail}
+                                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs shadow transition flex items-center gap-1.5"
+                              >
+                                <span>{effectiveLinked ? '🔑 Authorize This Laptop' : '🔵 Connect Gmail'}</span>
+                              </button>
+                            ) : (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  disabled={isSyncingGmail}
+                                  onClick={handleSyncLiveGmail}
+                                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs shadow transition flex items-center gap-1.5"
+                                >
+                                  <span>{isSyncingGmail ? '⏳' : '🔄'}</span>
+                                  <span>{isSyncingGmail ? 'Scanning...' : 'Scan Now'}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isSyncingGmail}
+                                  onClick={handleForceRescan}
+                                  className="px-3.5 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold rounded-xl text-xs transition flex items-center gap-1.5"
+                                  title="Clears processed cache and scans Gmail alerts into the ledger"
+                                >
+                                  <span>⚡</span>
+                                  <span>Force Re-Scan</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleDisconnectGmail}
+                                  className="px-3 py-1.5 bg-slate-800 hover:bg-rose-950/60 hover:text-rose-200 text-slate-400 font-semibold rounded-xl text-xs border border-slate-700 transition"
+                                >
+                                  Disconnect
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Synced Linked Email input */}
+                          <div className="pt-2.5 border-t border-slate-700/60 flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex-1 min-w-[240px]">
+                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                                Linked Gmail Address (Synced across devices)
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="email"
+                                  placeholder="e.g. yourname@gmail.com"
+                                  value={syncEmail}
+                                  onChange={(e) => setSyncEmail(e.target.value)}
+                                  className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!syncEmail.trim()) return;
+                                    updateEmailSyncConfig({ linkedEmail: syncEmail.trim() });
+                                    setGoogleEmail(syncEmail.trim());
+                                    setEmailSyncSaved(true);
+                                    setTimeout(() => setEmailSyncSaved(false), 3000);
+                                  }}
+                                  className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-600 transition"
+                                >
+                                  Save Email
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          {isDeviceAuthorized && (
+                            <div className="pt-2 border-t border-slate-700/60 flex flex-wrap items-center justify-between text-[11px] text-slate-400">
+                              <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={autoSyncEnabled}
+                                  onChange={(e) => {
+                                    setAutoSyncEnabled(e.target.checked);
+                                    localStorage.setItem('fleet_auto_sync', String(e.target.checked));
+                                  }}
+                                  className="rounded text-amber-500"
+                                />
+                                <span>Background auto-scan (every 45s while tab is active)</span>
+                              </label>
+                              <span>{lastSyncTime ? `Last scanned: ${lastSyncTime}` : 'Scan ready'}</span>
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
+                      );
+                    })()}
 
                     {/* Filter Keywords Form */}
                     <form
