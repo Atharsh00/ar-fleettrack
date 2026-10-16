@@ -1761,6 +1761,67 @@
         }
       };
 
+      // Permanently Delete User Account & All Associated Cloud Data (Full Account Termination)
+      const deleteAccount = async () => {
+        if (!currentUser) return;
+        const targetUserId = currentUser.id;
+        const userProfs = profiles.filter(p => p.userId === targetUserId || (!p.userId && p.name?.toLowerCase() === currentUser.businessName?.toLowerCase()));
+        const profIds = userProfs.map(p => p.id);
+        if (activeProfileId && !profIds.includes(activeProfileId)) {
+          profIds.push(activeProfileId);
+        }
+
+        // 1. Wipe directly from Supabase Cloud Database for real production accounts
+        if (!currentUser.isDemo && supabaseClient) {
+          try {
+            if (profIds.length > 0) {
+              await Promise.allSettled([
+                supabaseClient.from('trips').delete().in('profile_id', profIds),
+                supabaseClient.from('expenses').delete().in('profile_id', profIds),
+                supabaseClient.from('driver_payments').delete().in('profile_id', profIds),
+                supabaseClient.from('settlements').delete().in('profile_id', profIds),
+                supabaseClient.from('trucks').delete().in('profile_id', profIds),
+                supabaseClient.from('companies').delete().in('profile_id', profIds),
+                supabaseClient.from('drivers').delete().in('profile_id', profIds),
+                supabaseClient.from('rules').delete().in('profile_id', profIds),
+                supabaseClient.from('profiles').delete().in('id', profIds),
+                supabaseClient.from('profiles').delete().eq('user_id', targetUserId)
+              ]);
+            }
+          } catch (cloudErr) {
+            console.error('Error erasing account data from Supabase Cloud:', cloudErr);
+          }
+        }
+
+        // 2. Clear from React state
+        setTrips(prev => prev.filter(t => !profIds.includes(t.profileId)));
+        setExpenses(prev => prev.filter(e => !profIds.includes(e.profileId)));
+        setDriverPayments(prev => prev.filter(d => !profIds.includes(d.profileId)));
+        setSettlements(prev => prev.filter(s => !profIds.includes(s.profileId)));
+        setTrucks(prev => prev.filter(t => !profIds.includes(t.profileId)));
+        setCompanies(prev => prev.filter(c => !profIds.includes(c.profileId)));
+        setDrivers(prev => prev.filter(d => !profIds.includes(d.profileId)));
+        setProfiles(prev => prev.filter(p => !profIds.includes(p.id) && p.userId !== targetUserId));
+
+        // 3. Remove user from users array and update localStorage immediately
+        const remainingUsers = users.filter(u => u.id !== targetUserId);
+        setUsers(remainingUsers);
+        try {
+          localStorage.setItem(`${STORAGE_KEY}_users`, JSON.stringify(remainingUsers));
+          localStorage.removeItem(`${STORAGE_KEY}_cur_user`);
+          localStorage.removeItem(`${STORAGE_KEY}_active_prof`);
+          localStorage.removeItem('fleet_google_token');
+          localStorage.removeItem('fleet_google_email');
+          localStorage.removeItem('fleet_processed_gmail_msg_ids');
+        } catch (e) {
+          console.warn('Storage cleanup error:', e);
+        }
+
+        // 4. Reset active profile and log user out
+        setActiveProfileId(null);
+        setCurrentUser(null);
+      };
+
       return (
         <FleetContext.Provider value={{
           currentUser, users, login, signup, logout, loginDemo, resetPassword, changePassword,
@@ -1780,7 +1841,7 @@
           addDriver, updateDriver, deleteDriver,
           getTruckReg, getCompanyName, getDriverName,
           getTripExpenses, getTripReimbursable, getTripBalancePending, getTripProfit,
-          clearAllUserData,
+          clearAllUserData, deleteAccount,
           storageMode, setStorageMode,
           cloudSyncStatus,
           simulationStats,
@@ -4567,6 +4628,7 @@
         activeRules, updateRules, activeProfile,
         activeEmailConfig, updateEmailSyncConfig, syncExpensesFromEmails, syncFromLiveGmail,
         clearAllUserData,
+        deleteAccount,
         changePassword,
         storageMode, setStorageMode,
         cloudSyncStatus,
@@ -4578,6 +4640,7 @@
       const [subTab, setSubTab] = useState('trucks');
       const [searchQuery, setSearchQuery] = useState('');
       const [showClearModal, setShowClearModal] = useState(false);
+      const [clearActionType, setClearActionType] = useState('ledgers'); // 'ledgers' | 'masters' | 'account'
       const [clearWipeMasters, setClearWipeMasters] = useState(false);
       const [clearConfirmed, setClearConfirmed] = useState(false);
 
@@ -4980,7 +5043,7 @@
                 { id: 'email_sync', label: 'Email Expense Sync', icon: '✉️' },
                 { id: 'cloud_db', label: 'Cloud Database Status', icon: '☁️' },
                 { id: 'security', label: 'Account & Security', icon: '🔑' },
-                { id: 'data_erasure', label: 'Privacy & Data Erasure', icon: '🗑️' },
+                { id: 'data_erasure', label: 'Privacy, Erasure & Delete Account', icon: '🗑️' },
               ].map(st => (
                 <button
                   key={st.id}
@@ -5775,14 +5838,14 @@
                 </div>
               </div>
 
-              {/* Two Erasure Action Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Three Erasure & Account Action Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {/* Option 1: Operational Records Only */}
                 <div className="bg-slate-950/60 border border-amber-500/30 rounded-2xl p-5 flex flex-col justify-between">
                   <div>
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-base">📋</span>
-                      <h4 className="text-sm font-bold text-white">Clear Operational Ledgers Only</h4>
+                      <h4 className="text-sm font-bold text-white">Clear Operational Ledgers</h4>
                       <span className="text-[10px] px-2 py-0.5 rounded font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">Recommended</span>
                     </div>
                     <p className="text-xs text-slate-300 mb-3 leading-relaxed">
@@ -5806,6 +5869,7 @@
                   <button
                     type="button"
                     onClick={() => {
+                      setClearActionType('ledgers');
                       setClearWipeMasters(false);
                       setClearConfirmed(false);
                       setShowClearModal(true);
@@ -5822,7 +5886,7 @@
                   <div>
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-base">⚠️</span>
-                      <h4 className="text-sm font-bold text-rose-300">Complete Blank Slate (Full Erasure)</h4>
+                      <h4 className="text-sm font-bold text-rose-300">Complete Blank Slate</h4>
                       <span className="text-[10px] px-2 py-0.5 rounded font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">Total Wipe</span>
                     </div>
                     <p className="text-xs text-slate-300 mb-3 leading-relaxed">
@@ -5837,15 +5901,16 @@
                         <span>✕</span>
                         <span>Erases all Trips, Expenses, and Settlements</span>
                       </div>
-                      <div className="flex items-center gap-1.5 text-rose-400">
-                        <span>✕</span>
-                        <span>Clears Gmail sync cache & token credentials</span>
+                      <div className="flex items-center gap-1.5 text-emerald-400">
+                        <span>✓</span>
+                        <span>Preserves user account login credentials</span>
                       </div>
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => {
+                      setClearActionType('masters');
                       setClearWipeMasters(true);
                       setClearConfirmed(false);
                       setShowClearModal(true);
@@ -5854,6 +5919,47 @@
                   >
                     <span>💥</span>
                     <span>Wipe All Data to Blank Slate...</span>
+                  </button>
+                </div>
+
+                {/* Option 3: Permanently Delete Account */}
+                <div className="bg-slate-950/60 border border-red-500/60 rounded-2xl p-5 flex flex-col justify-between shadow-lg">
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-base">👤❌</span>
+                      <h4 className="text-sm font-bold text-red-400">Delete Entire Account</h4>
+                      <span className="text-[10px] px-2 py-0.5 rounded font-bold bg-red-500/20 text-red-300 border border-red-500/40">Permanent</span>
+                    </div>
+                    <p className="text-xs text-slate-300 mb-3 leading-relaxed">
+                      Permanently closes and terminates your account <strong>"{currentUser?.username}"</strong> ({currentUser?.businessName}). Wipes all fleet ledgers, master entities, and profiles from Supabase.
+                    </p>
+                    <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] text-slate-400 space-y-1 mb-4">
+                      <div className="flex items-center gap-1.5 text-red-400">
+                        <span>✕</span>
+                        <span>Deletes account login & registered credentials</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-red-400">
+                        <span>✕</span>
+                        <span>Deletes all Cloud Database & local fleet data</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-red-400">
+                        <span>✕</span>
+                        <span>Immediately signs out; cannot be reversed</span>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setClearActionType('account');
+                      setClearWipeMasters(true);
+                      setClearConfirmed(false);
+                      setShowClearModal(true);
+                    }}
+                    className="w-full py-2.5 px-4 bg-red-700 hover:bg-red-600 text-white font-black rounded-xl text-xs shadow-lg transition flex items-center justify-center gap-2"
+                  >
+                    <span>🚨</span>
+                    <span>Delete My Account Permanently...</span>
                   </button>
                 </div>
               </div>
@@ -5866,48 +5972,78 @@
               <div className="bg-slate-900 border border-rose-500/50 rounded-2xl w-full max-w-lg shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
                 <div className="flex justify-between items-start pb-3 border-b border-slate-800 mb-4">
                   <div className="flex items-center gap-2">
-                    <span className="p-2 rounded-xl bg-rose-500/20 text-rose-400 text-lg">⚠️</span>
+                    <span className="p-2 rounded-xl bg-rose-500/20 text-rose-400 text-lg">
+                      {clearActionType === 'account' ? '👤❌' : '⚠️'}
+                    </span>
                     <div>
-                      <h3 className="text-base font-black text-white">Are you sure you want to delete your data?</h3>
-                      <p className="text-[11px] text-slate-400">Privacy Policy Right to Erasure & GDPR Compliance</p>
+                      <h3 className="text-base font-black text-white">
+                        {clearActionType === 'account' ? 'Delete Account & All Cloud Records' : 'Are you sure you want to delete your data?'}
+                      </h3>
+                      <p className="text-[11px] text-slate-400">
+                        {clearActionType === 'account' ? 'Statutory Right to Erasure & Permanent Account Closure' : 'Privacy Policy Right to Erasure & GDPR Compliance'}
+                      </p>
                     </div>
                   </div>
                   <button onClick={() => { setShowClearModal(false); setClearConfirmed(false); }} className="text-slate-400 hover:text-white text-lg">✕</button>
                 </div>
 
                 <div className="space-y-4">
-                  <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 text-xs leading-relaxed">
-                    <strong>Irreversible Action:</strong> You are about to permanently delete your stored records from this device. Once deleted, this fleet data <strong>cannot be restored</strong>.
+                  <div className={`p-3.5 rounded-xl border text-xs leading-relaxed ${
+                    clearActionType === 'account' ? 'bg-red-500/15 border-red-500/50 text-red-200' : 'bg-rose-500/10 border-rose-500/30 text-rose-200'
+                  }`}>
+                    <strong>Irreversible Action:</strong>{' '}
+                    {clearActionType === 'account' ? (
+                      <>You are about to permanently delete your user account <strong>"{currentUser?.username}"</strong> ({currentUser?.businessName}) and all associated fleet records from both the Supabase PostgreSQL Cloud Database and local browser cache. Once confirmed, you will be immediately logged out and this account <strong>cannot be recovered</strong>.</>
+                    ) : (
+                      <>You are about to permanently delete your stored records from your Supabase PostgreSQL Cloud Database and this device. Once deleted, this fleet data <strong>cannot be restored</strong>.</>
+                    )}
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-2">Confirm Erasure Scope:</label>
+                    <label className="block text-xs font-bold text-slate-300 mb-2">Confirm Action Scope:</label>
                     <div className="space-y-2">
-                      <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${!clearWipeMasters ? 'bg-amber-500/10 border-amber-500/50 text-white' : 'bg-slate-800/40 border-slate-700 text-slate-300'}`}>
+                      <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${clearActionType === 'ledgers' ? 'bg-amber-500/10 border-amber-500/50 text-white' : 'bg-slate-800/40 border-slate-700 text-slate-300'}`}>
                         <input
                           type="radio"
                           name="master_clear_scope"
-                          checked={!clearWipeMasters}
-                          onChange={() => setClearWipeMasters(false)}
+                          checked={clearActionType === 'ledgers'}
+                          onChange={() => { setClearActionType('ledgers'); setClearWipeMasters(false); }}
                           className="mt-0.5 text-amber-500"
                         />
                         <div>
-                          <div className="text-xs font-bold">Operational Ledgers Only</div>
-                          <div className="text-[11px] text-slate-400">Wipes trips, direct expenses, driver payouts/claims, and company settlements. Keeps truck, company, and driver masters intact.</div>
+                          <div className="text-xs font-bold">1. Operational Ledgers Only</div>
+                          <div className="text-[11px] text-slate-400">Wipes trips, direct expenses, driver payouts/claims, and company settlements. Keeps truck, company, driver masters, and account login intact.</div>
                         </div>
                       </label>
 
-                      <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${clearWipeMasters ? 'bg-rose-500/10 border-rose-500/50 text-white' : 'bg-slate-800/40 border-slate-700 text-slate-300'}`}>
+                      <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${clearActionType === 'masters' ? 'bg-rose-500/10 border-rose-500/50 text-white' : 'bg-slate-800/40 border-slate-700 text-slate-300'}`}>
                         <input
                           type="radio"
                           name="master_clear_scope"
-                          checked={clearWipeMasters}
-                          onChange={() => setClearWipeMasters(true)}
+                          checked={clearActionType === 'masters'}
+                          onChange={() => { setClearActionType('masters'); setClearWipeMasters(true); }}
                           className="mt-0.5 text-rose-500"
                         />
                         <div>
-                          <div className="text-xs font-bold text-rose-300">Complete Blank Slate (Full Erasure)</div>
-                          <div className="text-[11px] text-slate-400">Purges EVERYTHING: trips, expenses, driver claims, settlements, and master registries (trucks, companies, drivers). Completely resets the app to zero.</div>
+                          <div className="text-xs font-bold text-rose-300">2. Complete Blank Slate (Full Erasure)</div>
+                          <div className="text-[11px] text-slate-400">Purges EVERYTHING: trips, expenses, driver claims, settlements, and master registries (trucks, companies, drivers). Preserves user login credentials.</div>
+                        </div>
+                      </label>
+
+                      <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${clearActionType === 'account' ? 'bg-red-950/70 border-red-500 text-white shadow-inner' : 'bg-slate-800/40 border-slate-700 text-slate-300'}`}>
+                        <input
+                          type="radio"
+                          name="master_clear_scope"
+                          checked={clearActionType === 'account'}
+                          onChange={() => { setClearActionType('account'); setClearWipeMasters(true); }}
+                          className="mt-0.5 text-red-500"
+                        />
+                        <div>
+                          <div className="text-xs font-black text-red-400 flex items-center gap-1.5">
+                            <span>🚨</span>
+                            <span>3. Delete Entire Account (Permanent Termination)</span>
+                          </div>
+                          <div className="text-[11px] text-slate-400">Permanently terminates your account login (<strong>{currentUser?.username}</strong>), wipes all fleet records, trucks, companies, drivers, and settings from Supabase Cloud DB and signs you out immediately.</div>
                         </div>
                       </label>
                     </div>
@@ -5922,7 +6058,9 @@
                         className="rounded text-rose-500 w-4 h-4 cursor-pointer"
                       />
                       <span className="text-xs font-semibold text-slate-200">
-                        I understand this action is permanent and cannot be undone
+                        {clearActionType === 'account'
+                          ? 'I understand that my account and all associated fleet records will be permanently deleted and cannot be recovered'
+                          : 'I understand this action is permanent and cannot be undone'}
                       </span>
                     </label>
                   </div>
@@ -5938,16 +6076,36 @@
                     <button
                       type="button"
                       disabled={!clearConfirmed}
-                      onClick={() => {
-                        clearAllUserData(clearWipeMasters, clearWipeMasters);
-                        setShowClearModal(false);
-                        setClearConfirmed(false);
-                        alert(clearWipeMasters ? 'All data has been wiped. Your application is now reset to a blank slate.' : 'All operational trips and ledgers have been cleared.');
+                      onClick={async () => {
+                        if (clearActionType === 'account') {
+                          await deleteAccount();
+                          setShowClearModal(false);
+                          setClearConfirmed(false);
+                          alert('Your account and all associated fleet records have been permanently deleted.');
+                        } else if (clearActionType === 'masters') {
+                          await clearAllUserData(true, true);
+                          setShowClearModal(false);
+                          setClearConfirmed(false);
+                          alert('All data has been wiped. Your application is now reset to a blank slate.');
+                        } else {
+                          await clearAllUserData(false, false);
+                          setShowClearModal(false);
+                          setClearConfirmed(false);
+                          alert('All operational trips and ledgers have been cleared.');
+                        }
                       }}
-                      className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-extrabold text-xs rounded-xl shadow-lg transition flex items-center justify-center gap-1.5"
+                      className={`px-5 py-2.5 disabled:opacity-40 disabled:cursor-not-allowed text-white font-extrabold text-xs rounded-xl shadow-lg transition flex items-center justify-center gap-1.5 ${
+                        clearActionType === 'account' ? 'bg-red-600 hover:bg-red-500' : 'bg-rose-600 hover:bg-rose-500'
+                      }`}
                     >
-                      <span>⚠️</span>
-                      <span>Yes, I am sure - Delete Data Permanently</span>
+                      <span>{clearActionType === 'account' ? '🚨' : '⚠️'}</span>
+                      <span>
+                        {clearActionType === 'account'
+                          ? 'Yes, Delete My Account Permanently'
+                          : clearActionType === 'masters'
+                          ? 'Yes, Delete All Fleet Records'
+                          : 'Yes, Clear Operational Ledgers'}
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -6628,13 +6786,14 @@
     function App() {
       const {
         currentUser, logout, profiles, activeProfileId, setActiveProfileId,
-        addProfile, updateProfile, deleteProfile, clearAllUserData,
+        addProfile, updateProfile, deleteProfile, clearAllUserData, deleteAccount,
         storageMode, setStorageMode, cloudSyncStatus
       } = useFleet();
       const [activeTab, setActiveTab] = useState('home');
       const [showProfModal, setShowProfModal] = useState(false);
       const [newProfName, setNewProfName] = useState('');
       const [showClearModal, setShowClearModal] = useState(false);
+      const [clearActionType, setClearActionType] = useState('ledgers'); // 'ledgers' | 'masters' | 'account'
       const [clearWipeMasters, setClearWipeMasters] = useState(false);
       const [clearConfirmed, setClearConfirmed] = useState(false);
       const [showChangePassModal, setShowChangePassModal] = useState(false);
@@ -6862,48 +7021,78 @@
               <div className="bg-slate-900 border border-rose-500/50 rounded-2xl w-full max-w-lg shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
                 <div className="flex justify-between items-start pb-3 border-b border-slate-800 mb-4">
                   <div className="flex items-center gap-2">
-                    <span className="p-2 rounded-xl bg-rose-500/20 text-rose-400 text-lg">⚠️</span>
+                    <span className="p-2 rounded-xl bg-rose-500/20 text-rose-400 text-lg">
+                      {clearActionType === 'account' ? '👤❌' : '⚠️'}
+                    </span>
                     <div>
-                      <h3 className="text-base font-black text-white">Are you sure you want to delete your data?</h3>
-                      <p className="text-[11px] text-slate-400">Privacy Policy Right to Erasure & Blank Slate Reset</p>
+                      <h3 className="text-base font-black text-white">
+                        {clearActionType === 'account' ? 'Delete Account & All Data' : 'Are you sure you want to delete your data?'}
+                      </h3>
+                      <p className="text-[11px] text-slate-400">
+                        {clearActionType === 'account' ? 'Permanent Account Deletion & Right to be Forgotten' : 'Privacy Policy Right to Erasure & Blank Slate Reset'}
+                      </p>
                     </div>
                   </div>
                   <button onClick={() => { setShowClearModal(false); setClearConfirmed(false); }} className="text-slate-400 hover:text-white text-lg">✕</button>
                 </div>
 
                 <div className="space-y-4">
-                  <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 text-xs leading-relaxed">
-                    <strong>Irreversible Action:</strong> You are about to permanently delete your business records from your Supabase PostgreSQL Cloud Database and local browser storage. This complies with your statutory right to erasure under privacy regulations. Once deleted, this data <strong>cannot be recovered</strong>.
+                  <div className={`p-3.5 rounded-xl border text-xs leading-relaxed ${
+                    clearActionType === 'account' ? 'bg-red-500/15 border-red-500/50 text-red-200' : 'bg-rose-500/10 border-rose-500/30 text-rose-200'
+                  }`}>
+                    <strong>Irreversible Action:</strong>{' '}
+                    {clearActionType === 'account' ? (
+                      <>You are about to permanently delete your user account <strong>"{currentUser?.username}"</strong> ({currentUser?.businessName}), your login credentials, and all associated fleet records from both the Supabase PostgreSQL Cloud Database and local browser cache. Once confirmed, you will be immediately signed out and this account <strong>cannot be recovered</strong>.</>
+                    ) : (
+                      <>You are about to permanently delete your business records from your Supabase PostgreSQL Cloud Database and local browser storage. This complies with your statutory right to erasure under privacy regulations. Once deleted, this data <strong>cannot be recovered</strong>.</>
+                    )}
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-2">Select Erasure Scope:</label>
+                    <label className="block text-xs font-bold text-slate-300 mb-2">Select Action Scope:</label>
                     <div className="space-y-2">
-                      <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${!clearWipeMasters ? 'bg-amber-500/10 border-amber-500/50 text-white' : 'bg-slate-800/40 border-slate-700 text-slate-300'}`}>
+                      <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${clearActionType === 'ledgers' ? 'bg-amber-500/10 border-amber-500/50 text-white' : 'bg-slate-800/40 border-slate-700 text-slate-300'}`}>
                         <input
                           type="radio"
                           name="app_clear_scope"
-                          checked={!clearWipeMasters}
-                          onChange={() => setClearWipeMasters(false)}
+                          checked={clearActionType === 'ledgers'}
+                          onChange={() => { setClearActionType('ledgers'); setClearWipeMasters(false); }}
                           className="mt-0.5 text-amber-500"
                         />
                         <div>
-                          <div className="text-xs font-bold">Operational Ledgers Only (Recommended)</div>
-                          <div className="text-[11px] text-slate-400">Permanently clears all Trips, Truck Expenses, Driver Payouts/Claims, and Client Settlements for the active profile from both the Cloud Database and local cache. Preserves registered Trucks, Companies, and Drivers.</div>
+                          <div className="text-xs font-bold">1. Operational Ledgers Only (Recommended)</div>
+                          <div className="text-[11px] text-slate-400">Permanently clears all Trips, Truck Expenses, Driver Payouts/Claims, and Client Settlements for the active profile from both the Cloud Database and local cache. Preserves registered Trucks, Companies, Drivers, and your login account.</div>
                         </div>
                       </label>
 
-                      <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${clearWipeMasters ? 'bg-rose-500/10 border-rose-500/50 text-white' : 'bg-slate-800/40 border-slate-700 text-slate-300'}`}>
+                      <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${clearActionType === 'masters' ? 'bg-rose-500/10 border-rose-500/50 text-white' : 'bg-slate-800/40 border-slate-700 text-slate-300'}`}>
                         <input
                           type="radio"
                           name="app_clear_scope"
-                          checked={clearWipeMasters}
-                          onChange={() => setClearWipeMasters(true)}
+                          checked={clearActionType === 'masters'}
+                          onChange={() => { setClearActionType('masters'); setClearWipeMasters(true); }}
                           className="mt-0.5 text-rose-500"
                         />
                         <div>
-                          <div className="text-xs font-bold text-rose-300">Complete Blank Slate (Full Erasure)</div>
-                          <div className="text-[11px] text-slate-400">Permanently purges EVERYTHING from your Cloud Database and local cache: all operational records and all master registries (Trucks, Companies, Drivers). Resets this account to zero.</div>
+                          <div className="text-xs font-bold text-rose-300">2. Complete Blank Slate (Full Erasure)</div>
+                          <div className="text-[11px] text-slate-400">Permanently purges EVERYTHING from your Cloud Database and local cache: all operational records and all master registries (Trucks, Companies, Drivers). Resets fleet to zero, but keeps your login account active.</div>
+                        </div>
+                      </label>
+
+                      <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${clearActionType === 'account' ? 'bg-red-950/70 border-red-500 text-white shadow-inner' : 'bg-slate-800/40 border-slate-700 text-slate-300'}`}>
+                        <input
+                          type="radio"
+                          name="app_clear_scope"
+                          checked={clearActionType === 'account'}
+                          onChange={() => { setClearActionType('account'); setClearWipeMasters(true); }}
+                          className="mt-0.5 text-red-500"
+                        />
+                        <div>
+                          <div className="text-xs font-black text-red-400 flex items-center gap-1.5">
+                            <span>🚨</span>
+                            <span>3. Delete Entire Account (Permanent Account Closure)</span>
+                          </div>
+                          <div className="text-[11px] text-slate-400">Permanently terminates your account login (<strong>{currentUser?.username}</strong>), wipes all fleet records, trucks, companies, drivers, and settings from Supabase Cloud DB and signs you out immediately.</div>
                         </div>
                       </label>
                     </div>
@@ -6918,7 +7107,9 @@
                         className="rounded text-rose-500 w-4 h-4 cursor-pointer"
                       />
                       <span className="text-xs font-semibold text-slate-200">
-                        I understand this action is permanent and cannot be undone
+                        {clearActionType === 'account'
+                          ? 'I understand that my account and all associated fleet records will be permanently deleted and cannot be recovered'
+                          : 'I understand this action is permanent and cannot be undone'}
                       </span>
                     </label>
                   </div>
@@ -6935,17 +7126,37 @@
                       type="button"
                       disabled={!clearConfirmed}
                       onClick={async () => {
-                        await clearAllUserData(clearWipeMasters, clearWipeMasters);
-                        setShowClearModal(false);
-                        setClearConfirmed(false);
-                        alert(clearWipeMasters
-                          ? 'All fleet records and master entities have been permanently deleted from your Supabase Cloud Database and local browser.'
-                          : 'All operational trips and ledgers have been permanently deleted from your Supabase Cloud Database and local browser.');
+                        if (clearActionType === 'account') {
+                          await deleteAccount();
+                          setShowClearModal(false);
+                          setClearConfirmed(false);
+                          alert('Your account and all associated fleet records have been permanently deleted from the Supabase Cloud Database and this device.');
+                        } else if (clearActionType === 'masters') {
+                          await clearAllUserData(true, true);
+                          setShowClearModal(false);
+                          setClearConfirmed(false);
+                          alert(clearWipeMasters
+                            ? 'All fleet records and master entities have been permanently deleted from your Supabase Cloud Database and local browser.'
+                            : 'All operational trips and ledgers have been permanently deleted from your Supabase Cloud Database and local browser.');
+                        } else {
+                          await clearAllUserData(false, false);
+                          setShowClearModal(false);
+                          setClearConfirmed(false);
+                          alert('All operational trips and ledgers have been permanently deleted from your Supabase Cloud Database and local browser.');
+                        }
                       }}
-                      className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-extrabold text-xs rounded-xl shadow-lg transition flex items-center justify-center gap-1.5"
+                      className={`px-5 py-2.5 disabled:opacity-40 disabled:cursor-not-allowed text-white font-extrabold text-xs rounded-xl shadow-lg transition flex items-center justify-center gap-1.5 ${
+                        clearActionType === 'account' ? 'bg-red-600 hover:bg-red-500' : 'bg-rose-600 hover:bg-rose-500'
+                      }`}
                     >
-                      <span>⚠️</span>
-                      <span>Yes, I am sure - Delete Data Permanently</span>
+                      <span>{clearActionType === 'account' ? '🚨' : '⚠️'}</span>
+                      <span>
+                        {clearActionType === 'account'
+                          ? 'Yes, Delete My Account Permanently'
+                          : clearActionType === 'masters'
+                          ? 'Yes, Delete All Fleet Records'
+                          : 'Yes, Clear Operational Ledgers'}
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -6969,20 +7180,35 @@
                   <span className="text-[10px]">↗</span>
                 </a>
               </div>
-              <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-wrap items-center gap-2.5">
                 <span className="font-mono text-[11px] text-slate-400">Section 194C TDS &bull; 15% Net Commission &bull; Universal Edit/Delete</span>
                 <button
                   type="button"
                   onClick={() => {
+                    setClearActionType('ledgers');
                     setClearWipeMasters(false);
                     setClearConfirmed(false);
                     setShowClearModal(true);
                   }}
                   className="px-2.5 py-1 rounded-lg bg-rose-950/40 hover:bg-rose-900/80 text-rose-300 hover:text-white border border-rose-800/60 font-semibold text-[11px] transition flex items-center gap-1.5"
-                  title="Clear data in compliance with Privacy Policy notes (Right to Erasure)"
+                  title="Clear operational data in compliance with Privacy Policy notes (Right to Erasure)"
                 >
                   <span>🗑️</span>
                   <span>Clear Data (Privacy Reset)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setClearActionType('account');
+                    setClearWipeMasters(true);
+                    setClearConfirmed(false);
+                    setShowClearModal(true);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-red-950/60 hover:bg-red-900 text-red-300 hover:text-white border border-red-700/80 font-semibold text-[11px] transition flex items-center gap-1.5 shadow-sm"
+                  title="Permanently terminate and delete your account and all associated data"
+                >
+                  <span>👤❌</span>
+                  <span>Delete Account</span>
                 </button>
               </div>
             </div>
