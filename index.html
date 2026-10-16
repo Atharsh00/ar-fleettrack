@@ -319,9 +319,9 @@
     const defaultEmailSyncConfig = {
       linkedEmail: '',
       tollEnabled: true,
-      tollSubjectFilter: 'FASTag Toll Debit Alert',
+      tollSubjectFilter: '',
       fuelEnabled: true,
-      fuelSubjectFilter: 'Fuel Transaction Alert',
+      fuelSubjectFilter: '',
       lastSyncedAt: null,
     };
 
@@ -343,6 +343,21 @@
 
     function FleetProvider({ children }) {
       const STORAGE_KEY = 'fleettrack_v4';
+
+      // Safe Supabase Cloud Query Executor (protects against builder .catch issues)
+      const safeCloudExec = async (promiseOrBuilder, errorLabel = 'Cloud Operation') => {
+        if (!supabaseClient) return null;
+        try {
+          const res = await promiseOrBuilder;
+          if (res?.error) {
+            console.warn(`[${errorLabel}] Error:`, res.error.message || res.error);
+          }
+          return res?.data ?? null;
+        } catch (err) {
+          console.warn(`[${errorLabel}] Exception:`, err.message || err);
+          return null;
+        }
+      };
 
       // --- USER AUTHENTICATION & MULTI-TENANCY ---
       const [users, setUsers] = useState(() => safeStorageGet(`${STORAGE_KEY}_users`, initialUsers));
@@ -612,14 +627,14 @@
             foundUser = localMatch;
             // Backfill into Supabase app_users if table exists
             if (supabaseClient) {
-              supabaseClient.from('app_users').upsert({
+              safeCloudExec(supabaseClient.from('app_users').upsert({
                 id: localMatch.id,
                 username: localMatch.username,
                 password: localMatch.password,
                 business_name: localMatch.businessName,
                 email: localMatch.email,
                 created_at: new Date().toISOString()
-              }).catch(() => {});
+              }), 'BackfillUser');
             }
           }
         }
@@ -662,7 +677,7 @@
           setProfiles(prev => [...prev, newProf]);
           setActiveProfileId(newProfId);
           if (supabaseClient) {
-            supabaseClient.from('profiles').upsert(toSnakeObj(newProf)).catch(() => {});
+            safeCloudExec(supabaseClient.from('profiles').upsert(toSnakeObj(newProf)), 'CreateProfile');
           }
         }
         return foundUser;
@@ -722,12 +737,12 @@
           } catch (uErr) {
             console.warn('Supabase app_users save warning:', uErr);
           }
-          supabaseClient.from('profiles').upsert(toSnakeObj(newProf)).catch(e => console.warn('Cloud profile init error:', e));
-          supabaseClient.from('rules').upsert({
+          safeCloudExec(supabaseClient.from('profiles').upsert(toSnakeObj(newProf)), 'SignupProfile');
+          safeCloudExec(supabaseClient.from('rules').upsert({
             profile_id: newProfId,
             default_driver_salary_percent: 15,
             default_tds_percent: 1
-          }).catch(e => console.warn('Cloud rules init error:', e));
+          }), 'SignupRules');
         }
 
         return newUser;
@@ -1469,7 +1484,7 @@
 
         setTrips(prev => [newTrip, ...prev]);
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('trips').upsert(toSnakeObj(newTrip)).catch(e => console.warn('Cloud trip insert error:', e));
+          safeCloudExec(supabaseClient.from('trips').upsert(toSnakeObj(newTrip)), 'InsertTrip');
         }
         return newTrip;
       };
@@ -1489,14 +1504,14 @@
           return updatedItem;
         }));
         if (storageMode === 'cloud' && supabaseClient && updatedItem) {
-          supabaseClient.from('trips').update(toSnakeObj(updatedItem)).eq('id', id).catch(e => console.warn('Cloud trip update error:', e));
+          safeCloudExec(supabaseClient.from('trips').update(toSnakeObj(updatedItem)).eq('id', id), 'UpdateTrip');
         }
       };
 
       const deleteTrip = (id) => {
         setTrips(prev => prev.filter(t => t.id !== id));
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('trips').delete().eq('id', id).catch(e => console.warn('Cloud trip delete error:', e));
+          safeCloudExec(supabaseClient.from('trips').delete().eq('id', id), 'DeleteTrip');
         }
       };
 
@@ -1517,20 +1532,20 @@
         };
         setExpenses(prev => [newExp, ...prev]);
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('expenses').upsert(toSnakeObj(newExp)).catch(e => console.warn('Cloud expense insert error:', e));
+          safeCloudExec(supabaseClient.from('expenses').upsert(toSnakeObj(newExp)), 'InsertExpense');
         }
         return newExp;
       };
       const updateTruckExpense = (id, updates) => {
         setExpenses(prev => prev.map(e => e.id === id ? { ...e, ...updates, amount: Number(updates.amount ?? e.amount) } : e));
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('expenses').update(toSnakeObj(updates)).eq('id', id).catch(e => console.warn('Cloud expense update error:', e));
+          safeCloudExec(supabaseClient.from('expenses').update(toSnakeObj(updates)).eq('id', id), 'UpdateExpense');
         }
       };
       const deleteTruckExpense = (id) => {
         setExpenses(prev => prev.filter(e => e.id !== id));
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('expenses').delete().eq('id', id).catch(e => console.warn('Cloud expense delete error:', e));
+          safeCloudExec(supabaseClient.from('expenses').delete().eq('id', id), 'DeleteExpense');
         }
       };
 
@@ -1552,20 +1567,20 @@
         };
         setDriverPayments(prev => [newDp, ...prev]);
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('driver_payments').upsert(toSnakeObj(newDp)).catch(e => console.warn('Cloud driver payment insert error:', e));
+          safeCloudExec(supabaseClient.from('driver_payments').upsert(toSnakeObj(newDp)), 'InsertDriverPayment');
         }
         return newDp;
       };
       const updateDriverPayment = (id, updates) => {
         setDriverPayments(prev => prev.map(p => p.id === id ? { ...p, ...updates, amount: Number(updates.amount ?? p.amount) } : p));
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('driver_payments').update(toSnakeObj(updates)).eq('id', id).catch(e => console.warn('Cloud driver payment update error:', e));
+          safeCloudExec(supabaseClient.from('driver_payments').update(toSnakeObj(updates)).eq('id', id), 'UpdateDriverPayment');
         }
       };
       const deleteDriverPayment = (id) => {
         setDriverPayments(prev => prev.filter(p => p.id !== id));
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('driver_payments').delete().eq('id', id).catch(e => console.warn('Cloud driver payment delete error:', e));
+          safeCloudExec(supabaseClient.from('driver_payments').delete().eq('id', id), 'DeleteDriverPayment');
         }
       };
 
@@ -1584,20 +1599,20 @@
         };
         setSettlements(prev => [newSt, ...prev]);
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('settlements').upsert(toSnakeObj(newSt)).catch(e => console.warn('Cloud settlement insert error:', e));
+          safeCloudExec(supabaseClient.from('settlements').upsert(toSnakeObj(newSt)), 'InsertSettlement');
         }
         return newSt;
       };
       const updateSettlement = (id, updates) => {
         setSettlements(prev => prev.map(s => s.id === id ? { ...s, ...updates, amount: Number(updates.amount ?? s.amount) } : s));
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('settlements').update(toSnakeObj(updates)).eq('id', id).catch(e => console.warn('Cloud settlement update error:', e));
+          safeCloudExec(supabaseClient.from('settlements').update(toSnakeObj(updates)).eq('id', id), 'UpdateSettlement');
         }
       };
       const deleteSettlement = (id) => {
         setSettlements(prev => prev.filter(s => s.id !== id));
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('settlements').delete().eq('id', id).catch(e => console.warn('Cloud settlement delete error:', e));
+          safeCloudExec(supabaseClient.from('settlements').delete().eq('id', id), 'DeleteSettlement');
         }
       };
 
@@ -1606,14 +1621,14 @@
         const newT = { id: `trk-${Date.now()}`, profileId: activeProfileId, ...input, isSimulation: Boolean(input.isSimulation) };
         setTrucks(prev => [...prev, newT]);
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('trucks').upsert(toSnakeObj(newT)).catch(e => console.warn('Cloud truck insert error:', e));
+          safeCloudExec(supabaseClient.from('trucks').upsert(toSnakeObj(newT)), 'InsertTruck');
         }
         return newT;
       };
       const updateTruck = (id, fields) => {
         setTrucks(prev => prev.map(t => t.id === id ? { ...t, ...fields } : t));
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('trucks').update(toSnakeObj(fields)).eq('id', id).catch(e => console.warn('Cloud truck update error:', e));
+          safeCloudExec(supabaseClient.from('trucks').update(toSnakeObj(fields)).eq('id', id), 'UpdateTruck');
         }
       };
       const deleteTruck = (id) => {
@@ -1624,7 +1639,7 @@
         }
         setTrucks(prev => prev.filter(t => t.id !== id));
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('trucks').delete().eq('id', id).catch(e => console.warn('Cloud truck delete error:', e));
+          safeCloudExec(supabaseClient.from('trucks').delete().eq('id', id), 'DeleteTruck');
         }
       };
 
@@ -1632,7 +1647,7 @@
         const newC = { id: `cmp-${Date.now()}`, profileId: activeProfileId, ...input, isSimulation: Boolean(input.isSimulation) };
         setCompanies(prev => [...prev, newC]);
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('companies').upsert(toSnakeObj(newC)).catch(e => console.warn('Cloud company insert error:', e));
+          safeCloudExec(supabaseClient.from('companies').upsert(toSnakeObj(newC)), 'InsertCompany');
         }
         return newC;
       };
@@ -1645,7 +1660,7 @@
         }
         setCompanies(prev => prev.map(c => c.id === id ? { ...c, ...fields } : c));
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('companies').update(toSnakeObj(fields)).eq('id', id).catch(e => console.warn('Cloud company update error:', e));
+          safeCloudExec(supabaseClient.from('companies').update(toSnakeObj(fields)).eq('id', id), 'UpdateCompany');
         }
       };
       const deleteCompany = (id) => {
@@ -1659,7 +1674,7 @@
         }
         setCompanies(prev => prev.filter(c => c.id !== id));
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('companies').delete().eq('id', id).catch(e => console.warn('Cloud company delete error:', e));
+          safeCloudExec(supabaseClient.from('companies').delete().eq('id', id), 'DeleteCompany');
         }
       };
 
@@ -1667,7 +1682,7 @@
         const newD = { id: `drv-${Date.now()}`, profileId: activeProfileId, ...input, status: 'ACTIVE', isSimulation: Boolean(input.isSimulation) };
         setDrivers(prev => [...prev, newD]);
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('drivers').upsert(toSnakeObj(newD)).catch(e => console.warn('Cloud driver insert error:', e));
+          safeCloudExec(supabaseClient.from('drivers').upsert(toSnakeObj(newD)), 'InsertDriver');
         }
         return newD;
       };
@@ -1680,7 +1695,7 @@
         }
         setDrivers(prev => prev.map(d => d.id === id ? { ...d, ...fields } : d));
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('drivers').update(toSnakeObj(fields)).eq('id', id).catch(e => console.warn('Cloud driver update error:', e));
+          safeCloudExec(supabaseClient.from('drivers').update(toSnakeObj(fields)).eq('id', id), 'UpdateDriver');
         }
       };
       const deleteDriver = (id) => {
@@ -1694,7 +1709,7 @@
         }
         setDrivers(prev => prev.filter(d => d.id !== id));
         if (storageMode === 'cloud' && supabaseClient) {
-          supabaseClient.from('drivers').delete().eq('id', id).catch(e => console.warn('Cloud driver delete error:', e));
+          safeCloudExec(supabaseClient.from('drivers').delete().eq('id', id), 'DeleteDriver');
         }
       };
 
@@ -1837,6 +1852,24 @@
             return t.truckId === targetTruckId && t.date <= mailDate;
           }) || scopedTrips.find(t => t.truckId === targetTruckId);
 
+          // Duplicate Guard: check existing ledger and newly parsed batch
+          const isDuplicate = expenses.some(e =>
+            (mail.id && e.sourceEmailId === mail.id) ||
+            (e.truckId === targetTruckId && e.date === mailDate && Number(e.amount) === Number(amount) && e.category === category)
+          ) || newExpensesCreated.some(e =>
+            (mail.id && e.sourceEmailId === mail.id) ||
+            (e.truckId === targetTruckId && e.date === mailDate && Number(e.amount) === Number(amount) && e.category === category)
+          );
+
+          if (isDuplicate) {
+            if (mail.id) successfulEmailIds.push(mail.id);
+            return; // Skip duplicate email record
+          }
+
+          const basicNote = category === 'TOLL'
+            ? `FASTag Toll - ${targetTruckReg}`
+            : `Diesel Fuel - ${targetTruckReg}`;
+
           const newExp = {
             id: `exp-auto-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
             profileId: activeProfileId,
@@ -1847,7 +1880,7 @@
             category: category,
             amount: amount,
             paymentMethod: category === 'TOLL' ? 'FASTag (Auto-Email)' : 'Fleet Card (Auto-Email)',
-            notes: `Auto-parsed from email [${mail.from || 'Gmail'}]: ${mail.subject} | Ref Truck: ${targetTruckReg}${ongoingTrip ? ` | Tagged to Trip: ${ongoingTrip.route}` : ' | Unlinked (no ongoing trip)'}`,
+            notes: basicNote,
             sourceEmailId: mail.id
           };
 
@@ -1858,6 +1891,9 @@
 
         if (newExpensesCreated.length > 0) {
           setExpenses(prev => [...newExpensesCreated, ...prev]);
+          if (storageMode === 'cloud' && supabaseClient) {
+            safeCloudExec(supabaseClient.from('expenses').upsert(newExpensesCreated.map(toSnakeObj)), 'AutoEmailExpenses');
+          }
           updateEmailSyncConfig({ lastSyncedAt: new Date().toISOString() });
         }
 
@@ -2334,11 +2370,225 @@
       );
     }
 
+    // --- TRIP DETAILED SUMMARY & TRANSACTIONS BREAKDOWN MODAL ---
+    function TripDetailModal({ trip, onClose }) {
+      const { scopedExpenses, scopedDriverPayments, getCompanyName, getTruckReg, getTripBalancePending, formatDate, formatCurr } = useFleet();
+      if (!trip) return null;
+
+      const compDisplay = getCompanyName ? getCompanyName(trip.companyName || trip.companyId) : (trip.companyName || trip.companyId);
+      const truckReg = getTruckReg ? getTruckReg(trip.truckId) : trip.truckId;
+      const driverName = trip.driverName || 'N/A';
+
+      // Financials
+      const rent = Number(trip.totalRent || 0);
+      const adv = Number(trip.advanceReceived || 0);
+      const rcvd = Number(trip.receivedAmount || 0);
+      const comm = Number(trip.commissionAmount || 0);
+      const tds = Number(trip.tdsAmount || 0);
+      const drvSal = Number(trip.driverCommission || 0);
+
+      // Associated transactions
+      const directExpenses = (scopedExpenses || []).filter(e => e.tripId === trip.id);
+      const opDirectExp = directExpenses.filter(e => !e.isReimbursable).reduce((s, e) => s + Number(e.amount || 0), 0);
+      const reimbDirectExp = directExpenses.filter(e => e.isReimbursable).reduce((s, e) => s + Number(e.amount || 0), 0);
+
+      const driverClaims = (scopedDriverPayments || []).filter(p => p.tripId === trip.id && p.type === 'DRIVER_EXPENSE');
+      const opDrvClaims = driverClaims.filter(p => !p.isReimbursable).reduce((s, p) => s + Number(p.amount || 0), 0);
+      const reimbDrvClaims = driverClaims.filter(p => p.isReimbursable).reduce((s, p) => s + Number(p.amount || 0), 0);
+
+      const totalReimb = reimbDirectExp + reimbDrvClaims;
+      const totalOpCost = opDirectExp + opDrvClaims + drvSal + comm + tds;
+      const tripProfit = rent - totalOpCost;
+      const profitMargin = rent > 0 ? (tripProfit / rent) * 100 : 0;
+      const balanceDue = getTripBalancePending ? getTripBalancePending(trip) : Math.max(0, rent + totalReimb - adv - rcvd - comm - tds);
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-4xl shadow-2xl p-6 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-start pb-4 border-b border-slate-800">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">🚛</span>
+                  <h3 className="text-lg font-bold text-white">{trip.route}</h3>
+                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 font-mono font-bold">
+                    {formatDate(trip.date)}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                  <span><strong>Truck:</strong> <span className="text-amber-300 font-mono">{truckReg}</span></span>
+                  <span><strong>Client:</strong> <span className="text-white">{compDisplay}</span></span>
+                  <span><strong>Driver:</strong> <span className="text-slate-300">{driverName}</span></span>
+                </p>
+              </div>
+              <button onClick={onClose} className="text-slate-400 hover:text-white text-xl p-1">✕</button>
+            </div>
+
+            <div className="py-4 overflow-y-auto space-y-5 flex-1 pr-1">
+              {/* Financial KPI Cards Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3">
+                  <span className="text-[10px] uppercase font-bold text-slate-400">Total Freight / Rent</span>
+                  <div className="text-base font-bold text-white font-mono mt-0.5">{formatCurr(rent)}</div>
+                  <span className="text-[10px] text-slate-500">Gross Contract</span>
+                </div>
+                <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3">
+                  <span className="text-[10px] uppercase font-bold text-slate-400">Advance + Received</span>
+                  <div className="text-base font-bold text-emerald-400 font-mono mt-0.5">{formatCurr(adv + rcvd)}</div>
+                  <span className="text-[10px] text-slate-500">Adv: {formatCurr(adv)} | Rcvd: {formatCurr(rcvd)}</span>
+                </div>
+                <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3">
+                  <span className="text-[10px] uppercase font-bold text-slate-400">Balance Pending</span>
+                  <div className="text-base font-bold text-amber-400 font-mono mt-0.5">{formatCurr(balanceDue)}</div>
+                  <span className="text-[10px] text-slate-500">Outstanding Due</span>
+                </div>
+                <div className={`bg-slate-950/70 border border-slate-800 rounded-xl p-3 ${tripProfit >= 0 ? 'border-emerald-500/30' : 'border-rose-500/30'}`}>
+                  <span className="text-[10px] uppercase font-bold text-slate-400">Net Operating Profit</span>
+                  <div className={`text-base font-bold font-mono mt-0.5 ${tripProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {formatCurr(tripProfit)}
+                  </div>
+                  <span className="text-[10px] text-slate-500">Margin: {Math.round(profitMargin)}%</span>
+                </div>
+              </div>
+
+              {/* Deductions & Expenses Summary Strip */}
+              <div className="bg-slate-800/40 border border-slate-800 rounded-xl p-3 grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+                <div>
+                  <span className="text-[10px] text-slate-400 block">TDS Deducted (1%):</span>
+                  <span className="font-mono font-bold text-blue-400">{formatCurr(tds)}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 block">Broker Commission:</span>
+                  <span className="font-mono font-bold text-rose-400">{formatCurr(comm)}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 block">Driver Wages (15%):</span>
+                  <span className="font-mono font-bold text-purple-400">{formatCurr(drvSal)}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 block">Direct Truck Fuel/Tolls:</span>
+                  <span className="font-mono font-bold text-rose-400">{formatCurr(opDirectExp)}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 block">Client Reimbursables:</span>
+                  <span className="font-mono font-bold text-amber-300">+{formatCurr(totalReimb)}</span>
+                </div>
+              </div>
+
+              {/* Transaction Table 1: Direct Truck Expenses (Fuel, Tolls, Repairs) */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                    <span>⛽</span> Direct Vehicle Expenses Tagged ({directExpenses.length})
+                  </h4>
+                  <span className="text-xs font-mono font-bold text-slate-400">Total: {formatCurr(directExpenses.reduce((s, e) => s + Number(e.amount || 0), 0))}</span>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-slate-800">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-slate-800/80 text-[10px] uppercase text-slate-400">
+                      <tr>
+                        <th className="p-2">Date</th>
+                        <th className="p-2">Category</th>
+                        <th className="p-2">Payment Method</th>
+                        <th className="p-2">Notes</th>
+                        <th className="p-2 text-center">Type</th>
+                        <th className="p-2 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800">
+                      {directExpenses.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-3 text-center text-slate-500 italic">No direct truck expenses tagged to this trip.</td>
+                        </tr>
+                      ) : (
+                        directExpenses.map(e => (
+                          <tr key={e.id} className="hover:bg-slate-800/30">
+                            <td className="p-2 font-mono text-slate-400 whitespace-nowrap">{formatDate(e.date)}</td>
+                            <td className="p-2 font-bold text-white whitespace-nowrap">{e.category}</td>
+                            <td className="p-2 text-slate-400 whitespace-nowrap">{e.paymentMethod || 'Cash / Direct'}</td>
+                            <td className="p-2 text-slate-300">{e.notes || '-'}</td>
+                            <td className="p-2 text-center whitespace-nowrap">
+                              {e.isReimbursable ? (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">Client Reimbursable</span>
+                              ) : (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-400">Vehicle Cost</span>
+                              )}
+                            </td>
+                            <td className="p-2 text-right font-mono font-bold text-rose-400 whitespace-nowrap">{formatCurr(e.amount)}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Transaction Table 2: Driver Claims & On-road Expenses */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                    <span>👨‍✈️</span> Driver Expense Claims Tagged ({driverClaims.length})
+                  </h4>
+                  <span className="text-xs font-mono font-bold text-slate-400">Total: {formatCurr(driverClaims.reduce((s, p) => s + Number(p.amount || 0), 0))}</span>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-slate-800">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-slate-800/80 text-[10px] uppercase text-slate-400">
+                      <tr>
+                        <th className="p-2">Date</th>
+                        <th className="p-2">Driver</th>
+                        <th className="p-2">Description</th>
+                        <th className="p-2 text-center">Type</th>
+                        <th className="p-2 text-right">Claim Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800">
+                      {driverClaims.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="p-3 text-center text-slate-500 italic">No driver expense claims tagged to this trip.</td>
+                        </tr>
+                      ) : (
+                        driverClaims.map(p => (
+                          <tr key={p.id} className="hover:bg-slate-800/30">
+                            <td className="p-2 font-mono text-slate-400 whitespace-nowrap">{formatDate(p.date)}</td>
+                            <td className="p-2 font-bold text-white whitespace-nowrap">{p.driverName}</td>
+                            <td className="p-2 text-slate-300">{p.description || '-'}</td>
+                            <td className="p-2 text-center whitespace-nowrap">
+                              {p.isReimbursable ? (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">Client Reimbursable</span>
+                              ) : (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-400">Driver Claim</span>
+                              )}
+                            </td>
+                            <td className="p-2 text-right font-mono font-bold text-amber-400 whitespace-nowrap">{formatCurr(p.amount)}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition shadow"
+              >
+                Close Summary
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     // --- TAB 2: TRUCK PERFORMANCE (STATUS BADGE REMOVED) ---
     function TruckPerformanceTab() {
       const { trucks, trips, filteredTrips, filteredExpenses, filteredDriverPayments, deleteTruckExpense, deleteDriverPayment, getCompanyName, getTripExpenses, getTripProfit, getTripBalancePending } = useFleet();
       const [selTruck, setSelTruck] = useState('all');
       const [editTarget, setEditTarget] = useState(null);
+      const [selectedTripForDetail, setSelectedTripForDetail] = useState(null);
 
       // Column filter states
       const [fleetFilters, setFleetFilters] = useState({});
@@ -2605,6 +2855,7 @@
                       <th className="py-2.5 px-2 text-right">Rent</th>
                       <th className="py-2.5 px-2 text-right">Trip Exp</th>
                       <th className="py-2.5 px-2 text-right">Trip Profit</th>
+                      <th className="py-2.5 px-2 text-center">Summary</th>
                     </tr>
                     <tr className="bg-slate-900/90 border-b border-slate-800">
                       <th className="p-1"><ColFilterInput value={tripColFilters.date} onChange={v => setTripColFilters({...tripColFilters, date: v})} placeholder="Date..." /></th>
@@ -2620,6 +2871,7 @@
                           )}
                         </div>
                       </th>
+                      <th className="p-1"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
@@ -2645,6 +2897,16 @@
                           <td className={`py-2 px-2 text-right font-mono font-bold whitespace-nowrap ${tripProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                             {formatCurr(tripProfit)}
                           </td>
+                          <td className="py-2 px-2 text-center whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTripForDetail(t)}
+                              className="px-2 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500 text-amber-400 hover:text-slate-950 border border-amber-500/20 font-bold text-[10px] transition shadow-sm"
+                              title="View detailed summary and transactions for this trip"
+                            >
+                              🔍 Details
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
@@ -2660,6 +2922,7 @@
                         <td className={`py-2 px-2 text-right font-mono font-black whitespace-nowrap ${tripsTotalProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {formatCurr(tripsTotalProfit)}
                         </td>
+                        <td className="py-2 px-2"></td>
                       </tr>
                     </tfoot>
                   )}
@@ -2781,6 +3044,7 @@
             </div>
           </div>
           {editTarget && <EditRecordModal target={editTarget} onClose={() => setEditTarget(null)} />}
+          {selectedTripForDetail && <TripDetailModal trip={selectedTripForDetail} onClose={() => setSelectedTripForDetail(null)} />}
         </div>
       );
     }
@@ -3079,19 +3343,26 @@
                       <input type="number" required min="1" value={expAmt} onChange={(e) => setExpAmt(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono" />
                     </div>
                   </div>
-                  <div className="flex items-start gap-2 bg-slate-800/60 p-2.5 rounded-lg border border-slate-700">
+                  <div className={`flex items-start gap-2 p-2.5 rounded-lg border ${!expTripId ? 'bg-slate-800/30 border-slate-800 opacity-60' : 'bg-slate-800/60 border-slate-700'}`}>
                     <input
                       type="checkbox"
                       id="edit-exp-reimbursable"
-                      checked={expReimbursable}
+                      disabled={!expTripId}
+                      checked={Boolean(expTripId && expReimbursable)}
                       onChange={(e) => setExpReimbursable(e.target.checked)}
-                      className="rounded text-amber-500 mt-0.5"
+                      className="rounded text-amber-500 mt-0.5 cursor-pointer disabled:cursor-not-allowed"
                     />
-                    <label htmlFor="edit-exp-reimbursable" className="text-xs text-white font-medium cursor-pointer">
+                    <label htmlFor="edit-exp-reimbursable" className={`text-xs font-medium ${!expTripId ? 'text-slate-400 cursor-not-allowed' : 'text-white cursor-pointer'}`}>
                       <span>Reimbursable by Company (Paid on behalf of client)</span>
-                      <span className="block text-[10px] text-slate-400 font-normal">
-                        Automatically included in Company Balance Due for linked trip. Does not reduce trip operating profit.
-                      </span>
+                      {!expTripId ? (
+                        <span className="block text-[10px] text-amber-400/90 font-medium">
+                          ⚠️ Available only when linked to a specific trip above.
+                        </span>
+                      ) : (
+                        <span className="block text-[10px] text-slate-400 font-normal">
+                          Automatically included in Company Balance Due for linked trip. Does not reduce trip operating profit.
+                        </span>
+                      )}
                     </label>
                   </div>
 
@@ -3159,16 +3430,22 @@
                     </div>
                   )}
                   {dpType === 'DRIVER_EXPENSE' && (
-                    <div className="flex items-center gap-2 p-2.5 bg-slate-800/60 border border-slate-700 rounded-lg">
+                    <div className={`flex items-start gap-2 p-2.5 rounded-lg border ${!dpTripId ? 'bg-slate-800/30 border-slate-800 opacity-60' : 'bg-slate-800/60 border-slate-700'}`}>
                       <input
                         type="checkbox"
                         id="editDpReimbursable"
-                        checked={dpReimbursable}
+                        disabled={!dpTripId}
+                        checked={Boolean(dpTripId && dpReimbursable)}
                         onChange={(e) => setDpReimbursable(e.target.checked)}
-                        className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 bg-slate-700 border-slate-600"
+                        className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 bg-slate-700 border-slate-600 mt-0.5 cursor-pointer disabled:cursor-not-allowed"
                       />
-                      <label htmlFor="editDpReimbursable" className="text-xs text-slate-300 font-medium cursor-pointer">
-                        Reimbursable by Company (Excluded from Vehicle Cost, Added to Client Due & Driver Ledger)
+                      <label htmlFor="editDpReimbursable" className={`text-xs font-medium ${!dpTripId ? 'text-slate-400 cursor-not-allowed' : 'text-slate-300 cursor-pointer'}`}>
+                        <span>Reimbursable by Company (Excluded from Vehicle Cost, Added to Client Due & Driver Ledger)</span>
+                        {!dpTripId && (
+                          <span className="block text-[10px] text-amber-400/90 font-medium">
+                            ⚠️ Available only when linked to a specific trip above.
+                          </span>
+                        )}
                       </label>
                     </div>
                   )}
@@ -3255,6 +3532,29 @@
       const [editTarget, setEditTarget] = useState(null);
       const [deepColFilters, setDeepColFilters] = useState({});
       const [payColFilters, setPayColFilters] = useState({});
+
+      // Synchronized horizontal scroll refs for Company Deep-Dive tables
+      const cmpTable1Ref = useRef(null);
+      const cmpTable2Ref = useRef(null);
+      const isSyncingCmpScroll = useRef(false);
+
+      const handleCmpScroll1 = () => {
+        if (isSyncingCmpScroll.current) return;
+        isSyncingCmpScroll.current = true;
+        if (cmpTable2Ref.current) {
+          cmpTable2Ref.current.scrollLeft = cmpTable1Ref.current.scrollLeft;
+        }
+        requestAnimationFrame(() => { isSyncingCmpScroll.current = false; });
+      };
+
+      const handleCmpScroll2 = () => {
+        if (isSyncingCmpScroll.current) return;
+        isSyncingCmpScroll.current = true;
+        if (cmpTable1Ref.current) {
+          cmpTable1Ref.current.scrollLeft = cmpTable2Ref.current.scrollLeft;
+        }
+        requestAnimationFrame(() => { isSyncingCmpScroll.current = false; });
+      };
 
       const companyLedgers = companies.map(cmp => {
         const cTrips = filteredTrips.filter(t => (t.companyName || '').trim().toLowerCase() === (cmp.name || '').trim().toLowerCase());
@@ -3592,8 +3892,9 @@
                   </div>
                   <button onClick={() => { setDeepDiveCmpId(null); setDeepColFilters({}); }} className="text-slate-400 hover:text-white text-lg">✕</button>
                 </div>
-                <div className="py-4 overflow-y-auto flex-1">
-                  <table className="w-full text-left text-xs text-slate-300">
+                <div className="py-4 overflow-y-auto flex-1 space-y-6">
+                  <div ref={cmpTable1Ref} onScroll={handleCmpScroll1} className="overflow-x-auto rounded-xl border border-slate-800">
+                    <table className="w-full text-left text-xs text-slate-300 min-w-[850px]">
                     <thead className="bg-slate-800/80 text-[10px] uppercase text-slate-400">
                       <tr>
                         <th className="p-2">Date</th>
@@ -3681,6 +3982,7 @@
                       </tr>
                     </tfoot>
                   </table>
+                </div>
 
                   {/* SEPARATE PAYMENTS & REIMBURSABLE EXPENSES TABLE */}
                   <div className="pt-6 mt-6 border-t border-slate-800 space-y-3">
@@ -3708,8 +4010,8 @@
                       </div>
                     </div>
 
-                    <div className="overflow-x-auto rounded-xl border border-slate-800">
-                      <table className="w-full text-left text-xs text-slate-300">
+                    <div ref={cmpTable2Ref} onScroll={handleCmpScroll2} className="overflow-x-auto rounded-xl border border-slate-800">
+                      <table className="w-full text-left text-xs text-slate-300 min-w-[850px]">
                         <thead className="bg-slate-800/80 text-[10px] uppercase text-slate-400">
                           <tr>
                             <th className="p-2.5">Date</th>
@@ -4840,19 +5142,26 @@
                 </div>
               </div>
 
-              <div className="flex items-start gap-2 bg-slate-800/60 p-3 rounded-xl border border-slate-700">
+              <div className={`flex items-start gap-2 p-3 rounded-xl border ${!eTripId ? 'bg-slate-800/30 border-slate-800 opacity-60' : 'bg-slate-800/60 border-slate-700'}`}>
                 <input
                   type="checkbox"
                   id="reimbursable"
-                  checked={eReimbursable}
+                  disabled={!eTripId}
+                  checked={Boolean(eTripId && eReimbursable)}
                   onChange={(e) => setEReimbursable(e.target.checked)}
-                  className="rounded text-amber-500 mt-0.5"
+                  className="rounded text-amber-500 mt-0.5 cursor-pointer disabled:cursor-not-allowed"
                 />
-                <label htmlFor="reimbursable" className="text-xs text-white font-medium cursor-pointer">
+                <label htmlFor="reimbursable" className={`text-xs font-medium ${!eTripId ? 'text-slate-400 cursor-not-allowed' : 'text-white cursor-pointer'}`}>
                   <span>Reimbursable by Company (Expense on behalf of client)</span>
-                  <span className="block text-[11px] text-slate-400 font-normal">
-                    Check this if you paid this expense on behalf of the customer. It will be added to the customer's pending balance due for the linked trip and will not reduce trip operating profit.
-                  </span>
+                  {!eTripId ? (
+                    <span className="block text-[11px] text-amber-400/90 font-medium">
+                      ⚠️ Available only when linked to a specific trip above (cannot be selected for general truck expenses).
+                    </span>
+                  ) : (
+                    <span className="block text-[11px] text-slate-400 font-normal">
+                      Check this if you paid this expense on behalf of the customer. It will be added to the customer's pending balance due for the linked trip and will not reduce trip operating profit.
+                    </span>
+                  )}
                 </label>
               </div>
 
@@ -4939,19 +5248,26 @@
                       Shows trips registered for the selected truck within the active view ({showAllTripsDriver ? 'All Time' : periodLabel}). Linking directly reduces this trip's net operating profit.
                     </p>
                   </div>
-                  <div className="flex items-start gap-2 bg-slate-800/60 p-3 rounded-xl border border-slate-700">
+                  <div className={`flex items-start gap-2 p-3 rounded-xl border ${!dpTripId ? 'bg-slate-800/30 border-slate-800 opacity-60' : 'bg-slate-800/60 border-slate-700'}`}>
                     <input
                       type="checkbox"
                       id="dpReimbursable"
-                      checked={dpReimbursable}
+                      disabled={!dpTripId}
+                      checked={Boolean(dpTripId && dpReimbursable)}
                       onChange={(e) => setDpReimbursable(e.target.checked)}
-                      className="rounded text-amber-500 mt-0.5"
+                      className="rounded text-amber-500 mt-0.5 cursor-pointer disabled:cursor-not-allowed"
                     />
-                    <label htmlFor="dpReimbursable" className="text-xs text-white font-medium cursor-pointer">
+                    <label htmlFor="dpReimbursable" className={`text-xs font-medium ${!dpTripId ? 'text-slate-400 cursor-not-allowed' : 'text-white cursor-pointer'}`}>
                       <span>Reimbursable by Company (Expense on behalf of client)</span>
-                      <span className="block text-[11px] text-slate-400 font-normal">
-                        Check this if the driver incurred this expense on behalf of the customer. It will be added to the customer's balance due in Company Receivables, credited to the driver in their Ledger, and will not reduce vehicle/trip operating profit.
-                      </span>
+                      {!dpTripId ? (
+                        <span className="block text-[11px] text-amber-400/90 font-medium">
+                          ⚠️ Available only when linked to a specific trip above (cannot be selected for general driver expenses).
+                        </span>
+                      ) : (
+                        <span className="block text-[11px] text-slate-400 font-normal">
+                          Check this if the driver incurred this expense on behalf of the customer. It will be added to the customer's balance due in Company Receivables, credited to the driver in their Ledger, and will not reduce vehicle/trip operating profit.
+                        </span>
+                      )}
                     </label>
                   </div>
                 </div>
@@ -4974,234 +5290,18 @@
       );
     }
 
-    // --- TAB 8: MASTER DATA MANAGEMENT (TRUCKS, COMPANIES, DRIVERS, RULES, EMAIL SYNC) ---
+    // --- TAB 8: MASTER DATA MANAGEMENT (TRUCKS, COMPANIES, DRIVERS) ---
     function MastersTab() {
       const {
-        currentUser,
         trucks, companies, drivers,
-        trips, expenses, driverPayments, settlements,
         addTruck, updateTruck, deleteTruck,
         addCompany, updateCompany, deleteCompany,
         addDriver, updateDriver, deleteDriver,
-        activeRules, updateRules, activeProfile, activeProfileId,
-        activeEmailConfig, updateEmailSyncConfig, syncExpensesFromEmails, syncFromLiveGmail,
-        clearAllUserData,
-        deleteAccount,
-        changePassword,
-        storageMode, setStorageMode,
-        cloudSyncStatus,
-        simulationStats,
-        pullCloudData, syncLocalToCloud,
-        generateSimulationData, wipeSimulationData,
+        activeProfile,
       } = useFleet();
 
       const [subTab, setSubTab] = useState('trucks');
       const [searchQuery, setSearchQuery] = useState('');
-      const [showClearModal, setShowClearModal] = useState(false);
-      const [clearActionType, setClearActionType] = useState('ledgers'); // 'ledgers' | 'masters' | 'account'
-      const [clearWipeMasters, setClearWipeMasters] = useState(false);
-      const [clearConfirmed, setClearConfirmed] = useState(false);
-
-      // Cloud Database & Demo Mode Management State
-      const [dbActionStatus, setDbActionStatus] = useState(null);
-      const [dbActionLoading, setDbActionLoading] = useState(false);
-      const [showWipeSimModal, setShowWipeSimModal] = useState(false);
-
-      // Account & Security Password Change State
-      const [curPass, setCurPass] = useState('');
-      const [newPass, setNewPass] = useState('');
-      const [confPass, setConfPass] = useState('');
-      const [passStatus, setPassStatus] = useState(null);
-      const [passLoading, setPassLoading] = useState(false);
-
-      const handleChangePassInMasters = (e) => {
-        e.preventDefault();
-        setPassStatus(null);
-        if (newPass !== confPass) {
-          setPassStatus({ type: 'error', message: 'New password and confirmation password do not match.' });
-          return;
-        }
-        setPassLoading(true);
-        try {
-          changePassword(curPass, newPass);
-          setPassStatus({ type: 'success', message: 'Password successfully updated!' });
-          setCurPass('');
-          setNewPass('');
-          setConfPass('');
-        } catch (err) {
-          setPassStatus({ type: 'error', message: err.message || 'Failed to update password.' });
-        } finally {
-          setPassLoading(false);
-        }
-      };
-
-      // Google Identity / 1-Click Gmail Connect State (Default Client ID pre-configured)
-      const DEFAULT_GOOGLE_CLIENT_ID = '371057355214-kc8o35sqpnopmth9rdtdsn4qllgj5fe3.apps.googleusercontent.com';
-      const [googleToken, setGoogleToken] = useState(() => localStorage.getItem('fleet_google_token') || '');
-      const [googleEmail, setGoogleEmail] = useState(() => localStorage.getItem('fleet_google_email') || '');
-      const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem('fleet_google_client_id') || DEFAULT_GOOGLE_CLIENT_ID);
-      const [isSyncingGmail, setIsSyncingGmail] = useState(false);
-      const [autoSyncEnabled, setAutoSyncEnabled] = useState(() => localStorage.getItem('fleet_auto_sync') !== 'false');
-      const [lastSyncTime, setLastSyncTime] = useState(null);
-
-      // Email Sync State
-      const [syncEmail, setSyncEmail] = useState(activeEmailConfig?.linkedEmail || '');
-      const [syncTollEnabled, setSyncTollEnabled] = useState(activeEmailConfig?.tollEnabled ?? true);
-      const [syncTollSubject, setSyncTollSubject] = useState(activeEmailConfig?.tollSubjectFilter || 'FASTag Toll Debit Alert');
-      const [syncFuelEnabled, setSyncFuelEnabled] = useState(activeEmailConfig?.fuelEnabled ?? true);
-      const [syncFuelSubject, setSyncFuelSubject] = useState(activeEmailConfig?.fuelSubjectFilter || 'Fuel Transaction Alert');
-      const [emailSyncSaved, setEmailSyncSaved] = useState(false);
-      const [syncStatusMsg, setSyncStatusMsg] = useState(null);
-
-      const handleConnectGmail = () => {
-        if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
-          alert('Google Identity Services script is still loading. Please check your internet connection or refresh the page.');
-          return;
-        }
-
-        const clientIdToUse = (googleClientId || DEFAULT_GOOGLE_CLIENT_ID).trim();
-        if (!clientIdToUse) {
-          alert('Google OAuth Client ID is not configured.');
-          return;
-        }
-
-        try {
-          const client = window.google.accounts.oauth2.initTokenClient({
-            client_id: clientIdToUse,
-            scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify',
-            callback: async (tokenResponse) => {
-              if (tokenResponse && tokenResponse.access_token) {
-                const token = tokenResponse.access_token;
-                setGoogleToken(token);
-                localStorage.setItem('fleet_google_token', token);
-
-                let userEmailFound = '';
-                try {
-                  const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-                    headers: { Authorization: `Bearer ${token}` }
-                  });
-                  if (res.ok) {
-                    const data = await res.json();
-                    if (data.email) userEmailFound = data.email;
-                  }
-                } catch (e) {
-                  console.warn('UserInfo fetch error:', e);
-                }
-
-                if (userEmailFound) {
-                  setGoogleEmail(userEmailFound);
-                  localStorage.setItem('fleet_google_email', userEmailFound);
-                  setSyncEmail(userEmailFound);
-                  updateEmailSyncConfig({ linkedEmail: userEmailFound });
-                }
-
-                setSyncStatusMsg({
-                  error: false,
-                  text: `🎉 Successfully connected to Gmail! (${userEmailFound || 'Authorized'}) Auto-sync active.`
-                });
-              } else if (tokenResponse && tokenResponse.error) {
-                setSyncStatusMsg({
-                  error: true,
-                  text: `⚠️ Google authorization failed: ${tokenResponse.error_description || tokenResponse.error}`
-                });
-              }
-            }
-          });
-          client.requestAccessToken();
-        } catch (err) {
-          setSyncStatusMsg({ error: true, text: `⚠️ Error initiating Google OAuth: ${err.message}` });
-        }
-      };
-
-      const handleDisconnectGmail = () => {
-        setGoogleToken('');
-        setGoogleEmail('');
-        localStorage.removeItem('fleet_google_token');
-        localStorage.removeItem('fleet_google_email');
-        setSyncStatusMsg({
-          error: false,
-          text: 'Gmail account disconnected.'
-        });
-      };
-
-      const handleSyncLiveGmail = async (isBackground = false) => {
-        if (!googleToken) {
-          if (!isBackground) alert('Please connect your Gmail account first.');
-          return;
-        }
-        if (!isBackground) setIsSyncingGmail(true);
-        if (!isBackground) setSyncStatusMsg(null);
-
-        const currentConfig = {
-          linkedEmail: syncEmail.trim() || googleEmail,
-          tollEnabled: syncTollEnabled,
-          tollSubjectFilter: syncTollSubject.trim(),
-          fuelEnabled: syncFuelEnabled,
-          fuelSubjectFilter: syncFuelSubject.trim(),
-        };
-        // Auto-persist latest input state so user changes apply immediately without needing to click Save first
-        updateEmailSyncConfig(currentConfig);
-
-        try {
-          const res = await syncFromLiveGmail(googleToken, currentConfig);
-          setLastSyncTime(new Date().toLocaleTimeString());
-          if (!isBackground || res.syncedCount > 0) {
-            setSyncStatusMsg({
-              error: false,
-              text: isBackground
-                ? `⚡ Auto-Synced: ${res.message}`
-                : `✅ ${res.message}`
-            });
-          }
-        } catch (err) {
-          if (!isBackground) {
-            setSyncStatusMsg({
-              error: true,
-              text: `⚠️ Gmail Sync Error: ${err.message}`
-            });
-          }
-        } finally {
-          if (!isBackground) setIsSyncingGmail(false);
-        }
-      };
-
-      const handleForceRescan = () => {
-        localStorage.removeItem('fleet_processed_gmail_msg_ids');
-        handleSyncLiveGmail(false);
-      };
-
-      // Automatic background sync (every 45s while tab is open or when switching back to tab)
-      useEffect(() => {
-        if (!googleToken || !autoSyncEnabled) return;
-
-        const initialTimer = setTimeout(() => {
-          handleSyncLiveGmail(true);
-        }, 1500);
-
-        const interval = setInterval(() => {
-          handleSyncLiveGmail(true);
-        }, 45000);
-
-        const onFocus = () => handleSyncLiveGmail(true);
-        window.addEventListener('focus', onFocus);
-
-        return () => {
-          clearTimeout(initialTimer);
-          clearInterval(interval);
-          window.removeEventListener('focus', onFocus);
-        };
-      }, [googleToken, autoSyncEnabled, syncTollSubject, syncFuelSubject, syncTollEnabled, syncFuelEnabled, googleEmail]);
-
-      // Keep sync state synced when active profile changes
-      useEffect(() => {
-        if (activeEmailConfig) {
-          setSyncEmail(activeEmailConfig.linkedEmail || '');
-          setSyncTollEnabled(activeEmailConfig.tollEnabled ?? true);
-          setSyncTollSubject(activeEmailConfig.tollSubjectFilter || 'FASTag Toll Debit Alert');
-          setSyncFuelEnabled(activeEmailConfig.fuelEnabled ?? true);
-          setSyncFuelSubject(activeEmailConfig.fuelSubjectFilter || 'Fuel Transaction Alert');
-        }
-      }, [activeEmailConfig]);
 
       // Truck Modal State
       const [truckModalOpen, setTruckModalOpen] = useState(false);
@@ -5230,13 +5330,6 @@
       const [dLicense, setDLicense] = useState('');
       const [dJoining, setDJoining] = useState('');
       const [dStatus, setDStatus] = useState('ACTIVE');
-
-      // Rules State
-      const currentSalaryPct = (activeRules && activeRules.defaultDriverSalaryPercent !== undefined) ? activeRules.defaultDriverSalaryPercent : 15;
-      const currentTdsPct = (activeRules && activeRules.defaultTdsPercent !== undefined) ? activeRules.defaultTdsPercent : 1;
-      const [driverSalaryPct, setDriverSalaryPct] = useState(currentSalaryPct.toString());
-      const [tdsPct, setTdsPct] = useState(currentTdsPct.toString());
-      const [rulesSaved, setRulesSaved] = useState(false);
 
       // Open Modal Helpers
       const openTruckModal = (t = null) => {
@@ -5326,16 +5419,6 @@
         setDrvModalOpen(false);
       };
 
-      const handleSaveRules = (e) => {
-        e.preventDefault();
-        const dVal = parseFloat(driverSalaryPct);
-        const tVal = parseFloat(tdsPct);
-        if (isNaN(dVal) || isNaN(tVal) || dVal < 0 || tVal < 0) return alert('Enter valid percentage');
-        updateRules({ defaultDriverSalaryPercent: dVal, defaultTdsPercent: tVal });
-        setRulesSaved(true);
-        setTimeout(() => setRulesSaved(false), 3000);
-      };
-
       // Column filter states for Master Tables
       const [truckColFilters, setTruckColFilters] = useState({});
       const [compColFilters, setCompColFilters] = useState({});
@@ -5397,16 +5480,11 @@
                 { id: 'trucks', label: `Truck Master (${trucks.length})`, icon: '🚛' },
                 { id: 'companies', label: `Company Master (${companies.length})`, icon: '🏢' },
                 { id: 'drivers', label: `Driver Master (${drivers.length})`, icon: '👨‍✈️' },
-                { id: 'rules', label: 'Rules & Formulas', icon: '⚙️' },
-                { id: 'email_sync', label: 'Email Expense Sync', icon: '✉️' },
-                { id: 'cloud_db', label: 'Cloud Database Status', icon: '☁️' },
-                { id: 'security', label: 'Account & Security', icon: '🔑' },
-                { id: 'data_erasure', label: 'Privacy, Erasure & Delete Account', icon: '🗑️' },
               ].map(st => (
                 <button
                   key={st.id}
                   onClick={() => { setSubTab(st.id); setSearchQuery(''); }}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition ${
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition ${
                     subTab === st.id ? 'bg-amber-500 text-slate-950 shadow-md font-extrabold' : 'text-slate-400 hover:text-white hover:bg-slate-800'
                   }`}
                 >
@@ -5416,32 +5494,30 @@
               ))}
             </div>
 
-            {subTab !== 'rules' && subTab !== 'email_sync' && subTab !== 'cloud_db' && subTab !== 'security' && subTab !== 'data_erasure' && (
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  placeholder={`Search ${subTab}...`}
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500 w-full sm:w-48"
-                />
-                {subTab === 'trucks' && (
-                  <button onClick={() => openTruckModal()} className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl whitespace-nowrap shadow">
-                    + Add Truck
-                  </button>
-                )}
-                {subTab === 'companies' && (
-                  <button onClick={() => openCompanyModal()} className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl whitespace-nowrap shadow">
-                    + Add Company
-                  </button>
-                )}
-                {subTab === 'drivers' && (
-                  <button onClick={() => openDriverModal()} className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl whitespace-nowrap shadow">
-                    + Add Driver
-                  </button>
-                )}
-              </div>
-            )}
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder={`Search ${subTab}...`}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500 w-full sm:w-48"
+              />
+              {subTab === 'trucks' && (
+                <button onClick={() => openTruckModal()} className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl whitespace-nowrap shadow">
+                  + Add Truck
+                </button>
+              )}
+              {subTab === 'companies' && (
+                <button onClick={() => openCompanyModal()} className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl whitespace-nowrap shadow">
+                  + Add Company
+                </button>
+              )}
+              {subTab === 'drivers' && (
+                <button onClick={() => openDriverModal()} className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl whitespace-nowrap shadow">
+                  + Add Driver
+                </button>
+              )}
+            </div>
           </div>
 
           {/* SUBTAB: TRUCKS */}
@@ -5620,856 +5696,9 @@
             </div>
           )}
 
-          {/* SUBTAB: RULES */}
-          {subTab === 'rules' && (
-            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-lg space-y-6">
-              <div className="flex justify-between items-center">
-                <div>
-                  <h3 className="text-base font-bold text-white">Calculation Rules & Formula Parameters</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">Parameters governing automatic driver salary and Section 194C TDS deductions for all new trips</p>
-                </div>
-                {rulesSaved && (
-                  <span className="text-xs text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-3 py-1 rounded-lg">
-                    ✅ Rules Saved Successfully!
-                  </span>
-                )}
-              </div>
-              <form onSubmit={handleSaveRules} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-4 bg-slate-800/60 rounded-xl border border-slate-700">
-                  <label className="block text-xs font-bold text-purple-300 mb-1">Default Driver Salary Commission (%)</label>
-                  <p className="text-[11px] text-slate-400 mb-2">Calculated as % of Net Rent (Agreed Rent minus TDS minus Broker Commission)</p>
-                  <input type="number" step="0.1" value={driverSalaryPct} onChange={(e) => setDriverSalaryPct(e.target.value)} className="w-24 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono font-bold" /> %
-                </div>
-                <div className="p-4 bg-slate-800/60 rounded-xl border border-slate-700">
-                  <label className="block text-xs font-bold text-emerald-300 mb-1">Default Statutory TDS Rate (%)</label>
-                  <p className="text-[11px] text-slate-400 mb-2">Standard rate withheld at source under Section 194C</p>
-                  <input type="number" step="0.1" value={tdsPct} onChange={(e) => setTdsPct(e.target.value)} className="w-24 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono font-bold" /> %
-                </div>
-                <div className="md:col-span-2 flex justify-end pt-2">
-                  <button type="submit" className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-md">
-                    Save Calculation Rules
-                  </button>
-                </div>
-              </form>
-            </div>
-          )}
-
-          {/* SUBTAB: EMAIL EXPENSE SYNC (OPTION 1: 1-CLICK GMAIL INTEGRATION) */}
-          {subTab === 'email_sync' && (
-            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-lg space-y-6">
-              {/* Header */}
-              <div className="flex flex-wrap justify-between items-center gap-3 pb-4 border-b border-slate-800">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xl">✉️</span>
-                    <h3 className="text-base font-bold text-white">
-                      1-Click Gmail Expense Sync & Trip Tagging (Option 1)
-                    </h3>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                      100% Free Forever
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Directly connect your Google account with zero recurring costs, zero custom domains, and zero external subscriptions. Automatically scans unread FASTag & fuel debit alerts, extracts vehicle plates & amounts, and attaches expenses to ongoing trips.
-                  </p>
-                </div>
-                {emailSyncSaved && (
-                  <span className="text-xs text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-lg animate-fadeIn">
-                    ✅ Rules & Settings Saved!
-                  </span>
-                )}
-              </div>
-
-              {/* Status Alert if any action fired */}
-              {syncStatusMsg && (
-                <div className={`p-4 rounded-xl border text-xs font-semibold animate-fadeIn ${syncStatusMsg.error ? 'bg-rose-950/60 border-rose-800 text-rose-200' : 'bg-emerald-950/60 border-emerald-800 text-emerald-200'}`}>
-                  {syncStatusMsg.text}
-                </div>
-              )}
-
-              {/* CARD 1: PRIMARY 1-CLICK GMAIL OAUTH INTEGRATION */}
-              <div className="bg-gradient-to-br from-blue-950/40 via-slate-900 to-slate-950 border border-blue-500/30 rounded-2xl p-6 shadow-xl relative overflow-hidden">
-                <div className="flex flex-wrap justify-between items-start gap-4">
-                  <div className="space-y-1 max-w-xl">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-xl bg-blue-500/20 border border-blue-500/30 flex items-center justify-center text-blue-400 font-black text-sm">
-                        G
-                      </div>
-                      <h4 className="text-sm font-black text-white uppercase tracking-wider">
-                        Google Workspace & Gmail Direct Sync
-                      </h4>
-                      {googleToken ? (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 font-mono">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                          Connected
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 font-mono">
-                          Not Connected
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-slate-300 pt-1">
-                      {googleToken
-                        ? `Connected to Gmail account: ${googleEmail || 'Active Session'}. AR FleetTrack has read-only authorization to scan for unread vehicle debit alerts.`
-                        : 'Connect your fleet dispatcher or accounts Gmail account with 1-click. Secure read access through official Google Identity Services.'}
-                    </p>
-                  </div>
-
-                  {/* Connect / Disconnect Action Buttons */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    {!googleToken ? (
-                      <button
-                        type="button"
-                        onClick={handleConnectGmail}
-                        className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-extrabold rounded-xl text-xs shadow-lg flex items-center gap-2 transition transform active:scale-95"
-                      >
-                        <span>🔵</span>
-                        <span>Connect Gmail Account</span>
-                      </button>
-                    ) : (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const next = !autoSyncEnabled;
-                            setAutoSyncEnabled(next);
-                            localStorage.setItem('fleet_auto_sync', String(next));
-                          }}
-                          className={`px-3.5 py-2.5 rounded-xl text-xs font-black flex items-center gap-1.5 border transition ${
-                            autoSyncEnabled 
-                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30' 
-                              : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'
-                          }`}
-                          title="Automatically checks Gmail every 45 seconds while this tab is open"
-                        >
-                          <span className={autoSyncEnabled ? "w-2 h-2 rounded-full bg-emerald-400 animate-pulse" : "w-2 h-2 rounded-full bg-slate-500"}></span>
-                          <span>{autoSyncEnabled ? 'Auto-Sync: ON (45s)' : 'Auto-Sync: OFF'}</span>
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isSyncingGmail}
-                          onClick={() => handleSyncLiveGmail(false)}
-                          className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs shadow-lg flex items-center gap-2 transition disabled:opacity-50"
-                        >
-                          <span>{isSyncingGmail ? '⏳' : '🔄'}</span>
-                          <span>{isSyncingGmail ? 'Scanning...' : 'Sync Now'}</span>
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isSyncingGmail}
-                          onClick={handleForceRescan}
-                          className="px-3.5 py-2.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-bold rounded-xl text-xs border border-amber-500/30 transition flex items-center gap-1.5"
-                          title="Clears processed cache and immediately re-scans and parses all matching emails from Gmail into your ledger"
-                        >
-                          <span>⚡</span>
-                          <span>Re-Scan All (Clear Cache)</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleDisconnectGmail}
-                          className="px-3 py-2.5 bg-slate-800 hover:bg-rose-900/60 hover:text-rose-200 text-slate-400 font-semibold rounded-xl text-xs border border-slate-700 transition"
-                        >
-                          ✕ Disconnect
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {googleToken && (
-                  <div className="mt-2 text-[11px] text-slate-400 flex items-center justify-between border-t border-slate-800/60 pt-2 font-mono">
-                    <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
-                      <span>●</span>
-                      <span>{autoSyncEnabled ? 'Real-time auto sync is running in the background.' : 'Auto-sync is paused. Click Sync Now to check manually.'}</span>
-                    </span>
-                    <span>{lastSyncTime ? `Last scan: ${lastSyncTime}` : 'Scanning started'}</span>
-                  </div>
-                )}
-              </div>
 
 
 
-              {/* CARD 3: KEYWORD FILTERS & TRIP TAGGING RULES */}
-              <form onSubmit={(e) => {
-                e.preventDefault();
-                updateEmailSyncConfig({
-                  linkedEmail: syncEmail.trim(),
-                  tollEnabled: syncTollEnabled,
-                  tollSubjectFilter: syncTollSubject.trim(),
-                  fuelEnabled: syncFuelEnabled,
-                  fuelSubjectFilter: syncFuelSubject.trim(),
-                });
-                setEmailSyncSaved(true);
-                setTimeout(() => setEmailSyncSaved(false), 3000);
-              }} className="space-y-4">
-                <div className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                  <span>⚙️</span> Email Subject Filter Rules
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Toll Configuration */}
-                  <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/80 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="text-xs font-bold text-emerald-300">FASTag / Highway Toll Filter</span>
-                        <p className="text-[11px] text-slate-400">Match debit notifications from FASTag banks</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setSyncTollEnabled(!syncTollEnabled)}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition ${
-                          syncTollEnabled
-                            ? 'bg-emerald-500 text-slate-950 shadow-md ring-1 ring-emerald-400'
-                            : 'bg-slate-800 text-slate-400 border border-slate-700'
-                        }`}
-                      >
-                        <span>{syncTollEnabled ? '✓ ON' : '✕ OFF'}</span>
-                      </button>
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                        Subject Line Keyword:
-                      </label>
-                      <input
-                        type="text"
-                        disabled={!syncTollEnabled}
-                        placeholder="e.g. FASTag Toll Debit Alert, Toll Plaza Transaction"
-                        value={syncTollSubject}
-                        onChange={(e) => setSyncTollSubject(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-amber-500 focus:outline-none disabled:opacity-40"
-                      />
-                      <p className="text-[10px] text-slate-400 mt-1">
-                        Matches your bank's notification subject (ICICI, HDFC, SBI, IDFC FIRST, Axis).
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Fuel Configuration */}
-                  <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/80 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="text-xs font-bold text-blue-300">Diesel / Fuel Fleet Card Filter</span>
-                        <p className="text-[11px] text-slate-400">Match debit notifications from oil companies</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setSyncFuelEnabled(!syncFuelEnabled)}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition ${
-                          syncFuelEnabled
-                            ? 'bg-blue-500 text-slate-950 shadow-md ring-1 ring-blue-400'
-                            : 'bg-slate-800 text-slate-400 border border-slate-700'
-                        }`}
-                      >
-                        <span>{syncFuelEnabled ? '✓ ON' : '✕ OFF'}</span>
-                      </button>
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                        Subject Line Keyword:
-                      </label>
-                      <input
-                        type="text"
-                        disabled={!syncFuelEnabled}
-                        placeholder="e.g. Fuel Transaction Alert, IOCL XtraPower, BPCL SmartFleet"
-                        value={syncFuelSubject}
-                        onChange={(e) => setSyncFuelSubject(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-amber-500 focus:outline-none disabled:opacity-40"
-                      />
-                      <p className="text-[10px] text-slate-400 mt-1">
-                        Matches fuel card alerts (IOCL XtraPower, BPCL SmartFleet, HPCL DriveTrack).
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Save Rules Row */}
-                <div className="flex flex-wrap justify-between items-center gap-3 pt-2">
-                  <div className="text-[11px] text-slate-400 font-mono">
-                    Last Synced: {activeEmailConfig?.lastSyncedAt ? new Date(activeEmailConfig.lastSyncedAt).toLocaleString() : 'Never'}
-                  </div>
-                  <button
-                    type="submit"
-                    className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-md"
-                  >
-                    Save Filter Rules
-                  </button>
-                </div>
-              </form>
-            </div>
-          )}
-
-          {/* SUBTAB: ACCOUNT & SECURITY (CREDENTIALS & PASSWORD CHANGE) */}
-          {subTab === 'security' && (
-            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
-              <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
-                <div>
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <span className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400">🔑</span>
-                    Account & Security Settings
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Manage your login password and view your workspace credentials.
-                  </p>
-                </div>
-                <span className="text-xs px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
-                  ● Workspace Active
-                </span>
-              </div>
-
-              {/* Account Details Overview */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-950/70 p-4 rounded-xl border border-slate-800">
-                <div>
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Business Name</span>
-                  <div className="text-sm font-bold text-white mt-0.5">{currentUser?.businessName || 'Default'}</div>
-                </div>
-                <div>
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Login Username</span>
-                  <div className="text-sm font-bold text-amber-400 font-mono mt-0.5">{currentUser?.username}</div>
-                </div>
-                <div>
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Registered Recovery Email</span>
-                  <div className="text-sm font-bold text-slate-300 font-mono mt-0.5">{currentUser?.email || 'None'}</div>
-                </div>
-                <div>
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Tenant Account ID</span>
-                  <div className="text-sm font-bold text-slate-400 font-mono mt-0.5">{currentUser?.id}</div>
-                </div>
-              </div>
-
-              {/* Change Password Card */}
-              <div className="bg-slate-950/40 border border-slate-800 rounded-2xl p-5 max-w-xl">
-                <h4 className="text-sm font-bold text-white mb-1 flex items-center gap-2">
-                  <span>🔒</span> Change Login Password
-                </h4>
-                <p className="text-xs text-slate-400 mb-4">
-                  Choose a new strong password (at least 6 characters).
-                </p>
-
-                {passStatus && (
-                  <div className={`mb-4 p-3 rounded-xl border text-xs font-semibold flex items-center gap-2 animate-fadeIn ${
-                    passStatus.type === 'success'
-                      ? 'bg-emerald-950/70 border-emerald-800 text-emerald-300'
-                      : 'bg-rose-950/70 border-rose-800 text-rose-300'
-                  }`}>
-                    <span>{passStatus.type === 'success' ? '✅' : '⚠️'}</span>
-                    <span>{passStatus.message}</span>
-                  </div>
-                )}
-
-                <form onSubmit={handleChangePassInMasters} className="space-y-3.5">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1">Current Password *</label>
-                    <input
-                      type="password"
-                      required
-                      placeholder="Enter current password"
-                      value={curPass}
-                      onChange={(e) => setCurPass(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1">New Password * (Min 6 characters)</label>
-                    <input
-                      type="password"
-                      required
-                      placeholder="Enter new password"
-                      value={newPass}
-                      onChange={(e) => setNewPass(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1">Confirm New Password *</label>
-                    <input
-                      type="password"
-                      required
-                      placeholder="Re-enter new password"
-                      value={confPass}
-                      onChange={(e) => setConfPass(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
-                    />
-                  </div>
-                  <div className="pt-2">
-                    <button
-                      type="submit"
-                      disabled={passLoading}
-                      className="px-6 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-md uppercase tracking-wider"
-                    >
-                      {passLoading ? 'Updating...' : 'Update Password'}
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
-          )}
-
-          {/* SUBTAB: CLOUD DATABASE STATUS & SYNCHRONIZATION */}
-          {subTab === 'cloud_db' && (
-            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6 animate-fadeIn">
-              {/* Header Title */}
-              <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
-                <div>
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <span className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400">☁️</span>
-                    Cloud Database & Synchronization
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Your fleet operations are directly synchronized with your PostgreSQL database on Supabase in real time.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs px-3 py-1 rounded-full border font-bold flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                    <span>🟢 Cloud Database Connected</span>
-                  </span>
-                </div>
-              </div>
-
-              {/* Action Feedback Banner */}
-              {dbActionStatus && (
-                <div className={`p-4 rounded-xl border text-xs font-semibold flex items-center justify-between gap-2 animate-fadeIn ${
-                  dbActionStatus.type === 'success'
-                    ? 'bg-emerald-950/70 border-emerald-800 text-emerald-300'
-                    : 'bg-rose-950/70 border-rose-800 text-rose-300'
-                }`}>
-                  <div className="flex items-center gap-2">
-                    <span>{dbActionStatus.type === 'success' ? '✅' : '⚠️'}</span>
-                    <span>{dbActionStatus.message}</span>
-                  </div>
-                  <button onClick={() => setDbActionStatus(null)} className="text-slate-400 hover:text-white text-xs">✕</button>
-                </div>
-              )}
-
-              {/* Cloud Database Connection Info */}
-              <div className="bg-slate-950/70 p-5 rounded-2xl border border-slate-800 space-y-3">
-                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                  PostgreSQL Connection Details
-                </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-                  <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase">Project ID</span>
-                    <div className="font-mono text-emerald-400 font-bold mt-1">vdmfymirrdkebnwlgnqz</div>
-                  </div>
-                  <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase">Cloud Endpoint</span>
-                    <div className="font-mono text-white truncate mt-1" title="https://vdmfymirrdkebnwlgnqz.supabase.co">https://vdmfymirrdkebnwlgnqz.supabase.co</div>
-                  </div>
-                  <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase">Engine</span>
-                    <div className="text-slate-300 font-bold mt-1">PostgreSQL 15 (Supabase)</div>
-                  </div>
-                  <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase">Sync Status</span>
-                    <div className="text-emerald-400 font-bold mt-1 flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                      <span>Live & Synchronized</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Cloud Migration & Refresh Tools */}
-              <div className="bg-slate-950/60 p-5 rounded-2xl border border-slate-800 space-y-3">
-                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                  Cloud Synchronization Tools
-                </h4>
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  All ledger additions and edits save automatically in real time. You can also force-push local cached entries to the cloud or refresh data from Supabase.
-                </p>
-                <div className="flex flex-wrap items-center gap-3 pt-2">
-                  <button
-                    type="button"
-                    disabled={dbActionLoading}
-                    onClick={async () => {
-                      setDbActionLoading(true);
-                      setDbActionStatus(null);
-                      try {
-                        await syncLocalToCloud();
-                        setDbActionStatus({
-                          type: 'success',
-                          message: 'Successfully pushed all local fleet records to Supabase PostgreSQL database!'
-                        });
-                      } catch (err) {
-                        setDbActionStatus({ type: 'error', message: err.message || 'Failed to push data to cloud.' });
-                      } finally {
-                        setDbActionLoading(false);
-                      }
-                    }}
-                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center gap-2"
-                  >
-                    <span>☁️</span>
-                    <span>{dbActionLoading ? 'Pushing...' : 'Push Local Cache to Cloud'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={dbActionLoading}
-                    onClick={async () => {
-                      setDbActionLoading(true);
-                      setDbActionStatus(null);
-                      try {
-                        await pullCloudData(activeProfileId || activeProfile?.id);
-                        setDbActionStatus({
-                          type: 'success',
-                          message: 'Successfully refreshed fresh fleet records from Supabase Cloud!'
-                        });
-                      } catch (err) {
-                        setDbActionStatus({ type: 'error', message: err.message || 'Failed to pull data from cloud.' });
-                      } finally {
-                        setDbActionLoading(false);
-                      }
-                    }}
-                    className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs rounded-xl shadow-sm transition flex items-center gap-2"
-                  >
-                    <span>🔄</span>
-                    <span>{dbActionLoading ? 'Refreshing...' : 'Refresh Data from Cloud'}</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* SUBTAB: DATA ERASURE & PRIVACY COMPLIANCE (RIGHT TO BE FORGOTTEN) */}
-          {subTab === 'data_erasure' && (
-            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
-              <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
-                <div>
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <span className="p-1.5 rounded-lg bg-rose-500/20 text-rose-400">🗑️</span>
-                    Privacy Data Erasure & Blank Slate Reset
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Comply with Privacy Policy terms and the statutory Right to Erasure (GDPR / Digital Personal Data Protection).
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <a
-                    href="/privacy.html"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-amber-400 hover:text-amber-300 underline font-semibold flex items-center gap-1"
-                  >
-                    <span>🔒 Privacy Policy</span>
-                    <span>↗</span>
-                  </a>
-                </div>
-              </div>
-
-              {/* Data Summary Inventory Pill Badges */}
-              <div>
-                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2.5">
-                  Current Stored Records for Active Entity ({activeProfile?.name}):
-                </h4>
-                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-                  <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 text-center">
-                    <div className="text-lg font-bold font-mono text-white">{trips.length}</div>
-                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Trips Logged</div>
-                  </div>
-                  <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 text-center">
-                    <div className="text-lg font-bold font-mono text-white">{expenses.length}</div>
-                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Expenses</div>
-                  </div>
-                  <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 text-center">
-                    <div className="text-lg font-bold font-mono text-white">{driverPayments.length}</div>
-                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Driver Claims</div>
-                  </div>
-                  <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 text-center">
-                    <div className="text-lg font-bold font-mono text-white">{settlements.length}</div>
-                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Settlements</div>
-                  </div>
-                  <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 text-center">
-                    <div className="text-lg font-bold font-mono text-amber-400">{trucks.length}</div>
-                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Trucks Master</div>
-                  </div>
-                  <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 text-center">
-                    <div className="text-lg font-bold font-mono text-amber-400">{companies.length}</div>
-                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Companies Master</div>
-                  </div>
-                  <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 text-center">
-                    <div className="text-lg font-bold font-mono text-amber-400">{drivers.length}</div>
-                    <div className="text-[10px] text-slate-400 font-semibold uppercase">Drivers Master</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Three Erasure & Account Action Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {/* Option 1: Operational Records Only */}
-                <div className="bg-slate-950/60 border border-amber-500/30 rounded-2xl p-5 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-base">📋</span>
-                      <h4 className="text-sm font-bold text-white">Clear Operational Ledgers</h4>
-                      <span className="text-[10px] px-2 py-0.5 rounded font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">Recommended</span>
-                    </div>
-                    <p className="text-xs text-slate-300 mb-3 leading-relaxed">
-                      Permanently wipes all trip records, direct truck expenses, driver salary payouts & roadside claims, and client settlement receipts for <strong>{activeProfile?.name}</strong>.
-                    </p>
-                    <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] text-slate-400 space-y-1 mb-4">
-                      <div className="flex items-center gap-1.5 text-emerald-400">
-                        <span>✓</span>
-                        <span>Preserves Truck, Company, and Driver masters</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-emerald-400">
-                        <span>✓</span>
-                        <span>Preserves account profile & business credentials</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-rose-400">
-                        <span>✕</span>
-                        <span>All trip accounting & balances reset to zero</span>
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setClearActionType('ledgers');
-                      setClearWipeMasters(false);
-                      setClearConfirmed(false);
-                      setShowClearModal(true);
-                    }}
-                    className="w-full py-2.5 px-4 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-white border border-amber-500/40 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2"
-                  >
-                    <span>🗑️</span>
-                    <span>Clear Operational Records...</span>
-                  </button>
-                </div>
-
-                {/* Option 2: Full Blank Slate */}
-                <div className="bg-slate-950/60 border border-rose-500/40 rounded-2xl p-5 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-base">⚠️</span>
-                      <h4 className="text-sm font-bold text-rose-300">Complete Blank Slate</h4>
-                      <span className="text-[10px] px-2 py-0.5 rounded font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">Total Wipe</span>
-                    </div>
-                    <p className="text-xs text-slate-300 mb-3 leading-relaxed">
-                      Permanently wipes EVERYTHING: all trips, expenses, driver claims, settlements, AND all registered trucks, client companies, and driver masters across the entire app.
-                    </p>
-                    <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] text-slate-400 space-y-1 mb-4">
-                      <div className="flex items-center gap-1.5 text-rose-400">
-                        <span>✕</span>
-                        <span>Erases all Trucks, Companies, and Drivers</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-rose-400">
-                        <span>✕</span>
-                        <span>Erases all Trips, Expenses, and Settlements</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-emerald-400">
-                        <span>✓</span>
-                        <span>Preserves user account login credentials</span>
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setClearActionType('masters');
-                      setClearWipeMasters(true);
-                      setClearConfirmed(false);
-                      setShowClearModal(true);
-                    }}
-                    className="w-full py-2.5 px-4 bg-rose-600 hover:bg-rose-500 text-white font-black rounded-xl text-xs shadow-lg transition flex items-center justify-center gap-2"
-                  >
-                    <span>💥</span>
-                    <span>Wipe All Data to Blank Slate...</span>
-                  </button>
-                </div>
-
-                {/* Option 3: Permanently Delete Account */}
-                <div className="bg-slate-950/60 border border-red-500/60 rounded-2xl p-5 flex flex-col justify-between shadow-lg">
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-base">👤❌</span>
-                      <h4 className="text-sm font-bold text-red-400">Delete Entire Account</h4>
-                      <span className="text-[10px] px-2 py-0.5 rounded font-bold bg-red-500/20 text-red-300 border border-red-500/40">Permanent</span>
-                    </div>
-                    <p className="text-xs text-slate-300 mb-3 leading-relaxed">
-                      Permanently closes and terminates your account <strong>"{currentUser?.username}"</strong> ({currentUser?.businessName}). Wipes all fleet ledgers, master entities, and profiles from Supabase.
-                    </p>
-                    <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] text-slate-400 space-y-1 mb-4">
-                      <div className="flex items-center gap-1.5 text-red-400">
-                        <span>✕</span>
-                        <span>Deletes account login & registered credentials</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-red-400">
-                        <span>✕</span>
-                        <span>Deletes all Cloud Database & local fleet data</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-red-400">
-                        <span>✕</span>
-                        <span>Immediately signs out; cannot be reversed</span>
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setClearActionType('account');
-                      setClearWipeMasters(true);
-                      setClearConfirmed(false);
-                      setShowClearModal(true);
-                    }}
-                    className="w-full py-2.5 px-4 bg-red-700 hover:bg-red-600 text-white font-black rounded-xl text-xs shadow-lg transition flex items-center justify-center gap-2"
-                  >
-                    <span>🚨</span>
-                    <span>Delete My Account Permanently...</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* PRIVACY & DATA ERASURE CONFIRMATION SAFETY MODAL */}
-          {showClearModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-fadeIn">
-              <div className="bg-slate-900 border border-rose-500/50 rounded-2xl w-full max-w-lg shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
-                <div className="flex justify-between items-start pb-3 border-b border-slate-800 mb-4">
-                  <div className="flex items-center gap-2">
-                    <span className="p-2 rounded-xl bg-rose-500/20 text-rose-400 text-lg">
-                      {clearActionType === 'account' ? '👤❌' : '⚠️'}
-                    </span>
-                    <div>
-                      <h3 className="text-base font-black text-white">
-                        {clearActionType === 'account' ? 'Delete Account & All Cloud Records' : 'Are you sure you want to delete your data?'}
-                      </h3>
-                      <p className="text-[11px] text-slate-400">
-                        {clearActionType === 'account' ? 'Statutory Right to Erasure & Permanent Account Closure' : 'Privacy Policy Right to Erasure & GDPR Compliance'}
-                      </p>
-                    </div>
-                  </div>
-                  <button onClick={() => { setShowClearModal(false); setClearConfirmed(false); }} className="text-slate-400 hover:text-white text-lg">✕</button>
-                </div>
-
-                <div className="space-y-4">
-                  <div className={`p-3.5 rounded-xl border text-xs leading-relaxed ${
-                    clearActionType === 'account' ? 'bg-red-500/15 border-red-500/50 text-red-200' : 'bg-rose-500/10 border-rose-500/30 text-rose-200'
-                  }`}>
-                    <strong>Irreversible Action:</strong>{' '}
-                    {clearActionType === 'account' ? (
-                      <>You are about to permanently delete your user account <strong>"{currentUser?.username}"</strong> ({currentUser?.businessName}) and all associated fleet records from both the Supabase PostgreSQL Cloud Database and local browser cache. Once confirmed, you will be immediately logged out and this account <strong>cannot be recovered</strong>.</>
-                    ) : (
-                      <>You are about to permanently delete your stored records from your Supabase PostgreSQL Cloud Database and this device. Once deleted, this fleet data <strong>cannot be restored</strong>.</>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-2">Confirm Action Scope:</label>
-                    <div className="space-y-2">
-                      <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${clearActionType === 'ledgers' ? 'bg-amber-500/10 border-amber-500/50 text-white' : 'bg-slate-800/40 border-slate-700 text-slate-300'}`}>
-                        <input
-                          type="radio"
-                          name="master_clear_scope"
-                          checked={clearActionType === 'ledgers'}
-                          onChange={() => { setClearActionType('ledgers'); setClearWipeMasters(false); }}
-                          className="mt-0.5 text-amber-500"
-                        />
-                        <div>
-                          <div className="text-xs font-bold">1. Operational Ledgers Only</div>
-                          <div className="text-[11px] text-slate-400">Wipes trips, direct expenses, driver payouts/claims, and company settlements. Keeps truck, company, driver masters, and account login intact.</div>
-                        </div>
-                      </label>
-
-                      <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${clearActionType === 'masters' ? 'bg-rose-500/10 border-rose-500/50 text-white' : 'bg-slate-800/40 border-slate-700 text-slate-300'}`}>
-                        <input
-                          type="radio"
-                          name="master_clear_scope"
-                          checked={clearActionType === 'masters'}
-                          onChange={() => { setClearActionType('masters'); setClearWipeMasters(true); }}
-                          className="mt-0.5 text-rose-500"
-                        />
-                        <div>
-                          <div className="text-xs font-bold text-rose-300">2. Complete Blank Slate (Full Erasure)</div>
-                          <div className="text-[11px] text-slate-400">Purges EVERYTHING: trips, expenses, driver claims, settlements, and master registries (trucks, companies, drivers). Preserves user login credentials.</div>
-                        </div>
-                      </label>
-
-                      <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${clearActionType === 'account' ? 'bg-red-950/70 border-red-500 text-white shadow-inner' : 'bg-slate-800/40 border-slate-700 text-slate-300'}`}>
-                        <input
-                          type="radio"
-                          name="master_clear_scope"
-                          checked={clearActionType === 'account'}
-                          onChange={() => { setClearActionType('account'); setClearWipeMasters(true); }}
-                          className="mt-0.5 text-red-500"
-                        />
-                        <div>
-                          <div className="text-xs font-black text-red-400 flex items-center gap-1.5">
-                            <span>🚨</span>
-                            <span>3. Delete Entire Account (Permanent Termination)</span>
-                          </div>
-                          <div className="text-[11px] text-slate-400">Permanently terminates your account login (<strong>{currentUser?.username}</strong>), wipes all fleet records, trucks, companies, drivers, and settings from Supabase Cloud DB and signs you out immediately.</div>
-                        </div>
-                      </label>
-                    </div>
-                  </div>
-
-                  <div className="pt-2 border-t border-slate-800">
-                    <label className="flex items-center gap-2.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={clearConfirmed}
-                        onChange={(e) => setClearConfirmed(e.target.checked)}
-                        className="rounded text-rose-500 w-4 h-4 cursor-pointer"
-                      />
-                      <span className="text-xs font-semibold text-slate-200">
-                        {clearActionType === 'account'
-                          ? 'I understand that my account and all associated fleet records will be permanently deleted and cannot be recovered'
-                          : 'I understand this action is permanent and cannot be undone'}
-                      </span>
-                    </label>
-                  </div>
-
-                  <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 pt-3 border-t border-slate-800">
-                    <button
-                      type="button"
-                      onClick={() => { setShowClearModal(false); setClearConfirmed(false); }}
-                      className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs rounded-xl transition"
-                    >
-                      ✕ Cancel & Keep Data
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!clearConfirmed}
-                      onClick={async () => {
-                        if (clearActionType === 'account') {
-                          await deleteAccount();
-                          setShowClearModal(false);
-                          setClearConfirmed(false);
-                          alert('Your account and all associated fleet records have been permanently deleted.');
-                        } else if (clearActionType === 'masters') {
-                          await clearAllUserData(true, true);
-                          setShowClearModal(false);
-                          setClearConfirmed(false);
-                          alert('All data has been wiped. Your application is now reset to a blank slate.');
-                        } else {
-                          await clearAllUserData(false, false);
-                          setShowClearModal(false);
-                          setClearConfirmed(false);
-                          alert('All operational trips and ledgers have been cleared.');
-                        }
-                      }}
-                      className={`px-5 py-2.5 disabled:opacity-40 disabled:cursor-not-allowed text-white font-extrabold text-xs rounded-xl shadow-lg transition flex items-center justify-center gap-1.5 ${
-                        clearActionType === 'account' ? 'bg-red-600 hover:bg-red-500' : 'bg-rose-600 hover:bg-rose-500'
-                      }`}
-                    >
-                      <span>{clearActionType === 'account' ? '🚨' : '⚠️'}</span>
-                      <span>
-                        {clearActionType === 'account'
-                          ? 'Yes, Delete My Account Permanently'
-                          : clearActionType === 'masters'
-                          ? 'Yes, Delete All Fleet Records'
-                          : 'Yes, Clear Operational Ledgers'}
-                      </span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
           {/* TRUCK MODAL */}
           {truckModalOpen && (
@@ -6661,6 +5890,869 @@
             <circle cx="75" cy="78" r="1.8" fill="#FDE68A" />
           </g>
         </svg>
+      );
+    }
+
+    // --- COMPONENT: CENTRALIZED SETTINGS MODAL ---
+    function SettingsModal({ onClose, onOpenExport, onOpenClearData, onOpenDeleteAccount }) {
+      const {
+        currentUser, profiles, activeProfileId, setActiveProfileId, activeProfile,
+        addProfile, deleteProfile,
+        activeRules, updateRules,
+        activeEmailConfig, updateEmailSyncConfig, syncFromLiveGmail,
+        storageMode, cloudSyncStatus, lastCloudSync, pullFromCloud, pushToCloud,
+        changePassword, formatDate
+      } = useFleet();
+
+      const [activeTab, setActiveTab] = useState('profiles'); // 'profiles' | 'rules' | 'email' | 'cloud' | 'export' | 'security' | 'privacy'
+
+      // Profile Management State
+      const [newProfName, setNewProfName] = useState('');
+      const handleAddProfile = (e) => {
+        e.preventDefault();
+        if (!newProfName.trim()) return;
+        addProfile(newProfName.trim());
+        setNewProfName('');
+      };
+
+      // Rules & Formulas State
+      const [driverSalaryPct, setDriverSalaryPct] = useState(String(activeRules?.defaultDriverSalaryPercent ?? 15));
+      const [tdsPct, setTdsPct] = useState(String(activeRules?.defaultTdsPercent ?? 1));
+      const [rulesSaved, setRulesSaved] = useState(false);
+      const handleSaveRules = (e) => {
+        e.preventDefault();
+        const dVal = parseFloat(driverSalaryPct);
+        const tVal = parseFloat(tdsPct);
+        if (isNaN(dVal) || isNaN(tVal) || dVal < 0 || tVal < 0) return alert('Enter valid percentage');
+        updateRules({ defaultDriverSalaryPercent: dVal, defaultTdsPercent: tVal });
+        setRulesSaved(true);
+        setTimeout(() => setRulesSaved(false), 3000);
+      };
+
+      // Email Expense Sync State
+      const DEFAULT_GOOGLE_CLIENT_ID = '371057355214-kc8o35sqpnopmth9rdtdsn4qllgj5fe3.apps.googleusercontent.com';
+      const [googleToken, setGoogleToken] = useState(() => localStorage.getItem('fleet_google_token') || '');
+      const [googleEmail, setGoogleEmail] = useState(() => localStorage.getItem('fleet_google_email') || '');
+      const [syncEmail, setSyncEmail] = useState(activeEmailConfig?.linkedEmail || '');
+      const [syncTollEnabled, setSyncTollEnabled] = useState(activeEmailConfig?.tollEnabled ?? true);
+      const [syncTollSubject, setSyncTollSubject] = useState(activeEmailConfig?.tollSubjectFilter ?? '');
+      const [syncFuelEnabled, setSyncFuelEnabled] = useState(activeEmailConfig?.fuelEnabled ?? true);
+      const [syncFuelSubject, setSyncFuelSubject] = useState(activeEmailConfig?.fuelSubjectFilter ?? '');
+      const [autoSyncEnabled, setAutoSyncEnabled] = useState(() => localStorage.getItem('fleet_auto_sync') !== 'false');
+      const [isSyncingGmail, setIsSyncingGmail] = useState(false);
+      const [emailSyncSaved, setEmailSyncSaved] = useState(false);
+      const [syncStatusMsg, setSyncStatusMsg] = useState(null);
+      const [lastSyncTime, setLastSyncTime] = useState(null);
+
+      const handleConnectGmail = () => {
+        if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
+          alert('Google Identity Services script is still loading. Please check your internet connection or refresh the page.');
+          return;
+        }
+        try {
+          const client = window.google.accounts.oauth2.initTokenClient({
+            client_id: DEFAULT_GOOGLE_CLIENT_ID,
+            scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify',
+            callback: async (tokenResponse) => {
+              if (tokenResponse && tokenResponse.access_token) {
+                const token = tokenResponse.access_token;
+                setGoogleToken(token);
+                localStorage.setItem('fleet_google_token', token);
+
+                let userEmailFound = '';
+                try {
+                  const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                    headers: { Authorization: `Bearer ${token}` }
+                  });
+                  if (res.ok) {
+                    const data = await res.json();
+                    if (data.email) userEmailFound = data.email;
+                  }
+                } catch (e) {
+                  console.warn('Could not fetch user email info:', e);
+                }
+
+                if (userEmailFound) {
+                  setGoogleEmail(userEmailFound);
+                  localStorage.setItem('fleet_google_email', userEmailFound);
+                  setSyncEmail(userEmailFound);
+                  updateEmailSyncConfig({ linkedEmail: userEmailFound });
+                }
+
+                setSyncStatusMsg({
+                  error: false,
+                  text: `🎉 Successfully connected to Gmail! (${userEmailFound || 'Authorized'}) Auto-sync active.`
+                });
+              } else if (tokenResponse && tokenResponse.error) {
+                setSyncStatusMsg({
+                  error: true,
+                  text: `⚠️ Google authorization failed: ${tokenResponse.error_description || tokenResponse.error}`
+                });
+              }
+            }
+          });
+          client.requestAccessToken();
+        } catch (err) {
+          setSyncStatusMsg({ error: true, text: `⚠️ Error initiating Google OAuth: ${err.message}` });
+        }
+      };
+
+      const handleDisconnectGmail = () => {
+        setGoogleToken('');
+        setGoogleEmail('');
+        localStorage.removeItem('fleet_google_token');
+        localStorage.removeItem('fleet_google_email');
+        setSyncStatusMsg({
+          error: false,
+          text: 'Gmail account disconnected.'
+        });
+      };
+
+      const handleSyncLiveGmail = async () => {
+        if (!googleToken) {
+          alert('Please connect your Gmail account first.');
+          return;
+        }
+        setIsSyncingGmail(true);
+        setSyncStatusMsg(null);
+
+        const currentConfig = {
+          linkedEmail: syncEmail.trim() || googleEmail,
+          tollEnabled: syncTollEnabled,
+          tollSubjectFilter: syncTollSubject.trim(),
+          fuelEnabled: syncFuelEnabled,
+          fuelSubjectFilter: syncFuelSubject.trim(),
+        };
+        updateEmailSyncConfig(currentConfig);
+
+        try {
+          const res = await syncFromLiveGmail(googleToken, currentConfig);
+          setLastSyncTime(new Date().toLocaleTimeString());
+          setSyncStatusMsg({
+            error: false,
+            text: `✅ ${res.message}`
+          });
+        } catch (err) {
+          setSyncStatusMsg({
+            error: true,
+            text: `⚠️ Gmail Sync Error: ${err.message}`
+          });
+        } finally {
+          setIsSyncingGmail(false);
+        }
+      };
+
+      const handleForceRescan = () => {
+        localStorage.removeItem('fleet_processed_gmail_msg_ids');
+        handleSyncLiveGmail();
+      };
+
+      // Security / Change Password State
+      const [curPass, setCurPass] = useState('');
+      const [newPass, setNewPass] = useState('');
+      const [confPass, setConfPass] = useState('');
+      const [passStatus, setPassStatus] = useState(null);
+      const [passLoading, setPassLoading] = useState(false);
+
+      const handleChangePass = (e) => {
+        e.preventDefault();
+        setPassStatus(null);
+        if (newPass !== confPass) {
+          setPassStatus({ type: 'error', message: 'New password and confirmation password do not match.' });
+          return;
+        }
+        setPassLoading(true);
+        try {
+          changePassword(curPass, newPass);
+          setPassStatus({ type: 'success', message: 'Password successfully updated!' });
+          setCurPass('');
+          setNewPass('');
+          setConfPass('');
+        } catch (err) {
+          setPassStatus({ type: 'error', message: err.message || 'Failed to update password.' });
+        } finally {
+          setPassLoading(false);
+        }
+      };
+
+      // Cloud Action State
+      const [dbActionStatus, setDbActionStatus] = useState(null);
+      const [dbActionLoading, setDbActionLoading] = useState(false);
+
+      const navTabs = [
+        { id: 'profiles', label: 'Entity Profiles', icon: '🏢' },
+        { id: 'rules', label: 'Rules & Formulas', icon: '⚙️' },
+        { id: 'email', label: 'Email Expense Sync', icon: '✉️' },
+        { id: 'cloud', label: 'Cloud Database', icon: '☁️' },
+        { id: 'export', label: 'Export CSV', icon: '📊' },
+        { id: 'security', label: 'Account & Security', icon: '🔑' },
+        { id: 'privacy', label: 'Privacy & Erasure', icon: '🔒' },
+      ];
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+            {/* Header */}
+            <div className="flex justify-between items-center px-6 py-4 border-b border-slate-800 bg-slate-950/40">
+              <div className="flex items-center gap-2.5">
+                <span className="text-xl">⚙️</span>
+                <div>
+                  <h3 className="text-base font-bold text-white">Application Settings & Configuration</h3>
+                  <p className="text-xs text-slate-400">Configure entities, calculation rules, automated email expense sync, cloud database, and account security</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                className="text-slate-400 hover:text-white text-xl p-1.5 rounded-lg hover:bg-slate-800 transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body: Sidebar & Content */}
+            <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
+              {/* Sidebar Navigation */}
+              <div className="w-full md:w-56 bg-slate-950/60 border-b md:border-b-0 md:border-r border-slate-800 p-3 overflow-x-auto md:overflow-y-auto flex md:flex-col gap-1.5 shrink-0">
+                {navTabs.map(t => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setActiveTab(t.id)}
+                    className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition whitespace-nowrap text-left ${
+                      activeTab === t.id
+                        ? 'bg-amber-500 text-slate-950 shadow-md font-extrabold'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                    }`}
+                  >
+                    <span>{t.icon}</span>
+                    <span>{t.label}</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* Tab Content Panel */}
+              <div className="flex-1 p-5 sm:p-6 overflow-y-auto space-y-6">
+                {/* 1. PROFILES MANAGEMENT */}
+                {activeTab === 'profiles' && (
+                  <div className="space-y-5 animate-fadeIn">
+                    <div className="border-b border-slate-800 pb-3">
+                      <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                        <span>🏢</span> Multi-Entity Business Profiles
+                      </h4>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Manage independent companies, sister concerns, or branch entities. Each profile maintains isolated ledgers and trucks.
+                      </p>
+                    </div>
+
+                    <div className="bg-slate-800/40 border border-slate-700/80 rounded-xl p-4 space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-300 mb-1.5">Active Profile / Entity</label>
+                        <select
+                          value={activeProfileId}
+                          onChange={(e) => setActiveProfileId(e.target.value)}
+                          className="w-full sm:w-80 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-bold"
+                        >
+                          {profiles.map(p => (
+                            <option key={p.id} value={p.id}>
+                              {p.name} {p.id === activeProfileId ? '(Active)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <form onSubmit={handleAddProfile} className="space-y-2 pt-2 border-t border-slate-800">
+                        <label className="block text-xs font-bold text-slate-300">Create New Entity Profile</label>
+                        <div className="flex gap-2 max-w-md">
+                          <input
+                            type="text"
+                            required
+                            placeholder="e.g. AR Logistics South Division"
+                            value={newProfName}
+                            onChange={(e) => setNewProfName(e.target.value)}
+                            className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+                          />
+                          <button
+                            type="submit"
+                            className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs shadow transition whitespace-nowrap"
+                          >
+                            + Add Profile
+                          </button>
+                        </div>
+                      </form>
+
+                      <div className="space-y-2 pt-2">
+                        <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Registered Profiles ({profiles.length})</span>
+                        <div className="space-y-2 max-h-56 overflow-y-auto">
+                          {profiles.map(p => (
+                            <div
+                              key={p.id}
+                              className={`p-3 rounded-xl border flex justify-between items-center text-xs transition ${
+                                p.id === activeProfileId
+                                  ? 'border-amber-500 bg-amber-500/10 text-white'
+                                  : 'border-slate-800 bg-slate-900/60 text-slate-300'
+                              }`}
+                            >
+                              <div
+                                className="cursor-pointer flex items-center gap-2"
+                                onClick={() => setActiveProfileId(p.id)}
+                              >
+                                <span className="font-bold">{p.name}</span>
+                                {p.id === activeProfileId && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold">
+                                    Active Entity
+                                  </span>
+                                )}
+                              </div>
+                              {profiles.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (confirm(`Delete profile "${p.name}"? All isolated records will be permanently removed.`)) {
+                                      deleteProfile(p.id);
+                                    }
+                                  }}
+                                  className="text-rose-400 hover:text-rose-300 font-semibold px-2 py-1 rounded hover:bg-rose-950/40 text-xs transition"
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. RULES & FORMULAS */}
+                {activeTab === 'rules' && (
+                  <div className="space-y-5 animate-fadeIn">
+                    <div className="border-b border-slate-800 pb-3">
+                      <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                        <span>⚙️</span> Operational Rules & Statutory Formulas
+                      </h4>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Define global calculation parameters for Section 194C TDS withholding and driver wage commissions.
+                      </p>
+                    </div>
+
+                    {rulesSaved && (
+                      <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-300 text-xs font-bold animate-fadeIn">
+                        ✅ Calculation rules saved successfully and applied to future entries!
+                      </div>
+                    )}
+
+                    <form onSubmit={handleSaveRules} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="p-4 bg-slate-800/40 rounded-xl border border-slate-700/80 space-y-2">
+                        <label className="block text-xs font-bold text-purple-300">
+                          Default Driver Salary Commission (%)
+                        </label>
+                        <p className="text-[11px] text-slate-400 leading-relaxed">
+                          Calculated as % of Net Rent (Agreed Freight minus TDS minus Broker Commission).
+                        </p>
+                        <div className="flex items-center gap-2 pt-1">
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max="100"
+                            value={driverSalaryPct}
+                            onChange={(e) => setDriverSalaryPct(e.target.value)}
+                            className="w-28 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono font-bold"
+                          />
+                          <span className="text-xs text-slate-400 font-bold">%</span>
+                        </div>
+                      </div>
+
+                      <div className="p-4 bg-slate-800/40 rounded-xl border border-slate-700/80 space-y-2">
+                        <label className="block text-xs font-bold text-emerald-300">
+                          Default Statutory TDS Rate (%)
+                        </label>
+                        <p className="text-[11px] text-slate-400 leading-relaxed">
+                          Standard tax rate deducted at source under Section 194C of the Income Tax Act.
+                        </p>
+                        <div className="flex items-center gap-2 pt-1">
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max="10"
+                            value={tdsPct}
+                            onChange={(e) => setTdsPct(e.target.value)}
+                            className="w-28 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono font-bold"
+                          />
+                          <span className="text-xs text-slate-400 font-bold">%</span>
+                        </div>
+                      </div>
+
+                      <div className="md:col-span-2 flex justify-end pt-2">
+                        <button
+                          type="submit"
+                          className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-md transition"
+                        >
+                          Save Calculation Rules
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
+
+                {/* 3. EMAIL EXPENSE SYNC */}
+                {activeTab === 'email' && (
+                  <div className="space-y-5 animate-fadeIn">
+                    <div className="border-b border-slate-800 pb-3">
+                      <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                        <span>✉️</span> 1-Click Gmail Expense Sync & FASTag Auto-Detection
+                      </h4>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Scans FASTag debit and fuel card notifications from Gmail, parses vehicle registration, amount, and links them to trips.
+                      </p>
+                    </div>
+
+                    {syncStatusMsg && (
+                      <div className={`p-3.5 rounded-xl border text-xs font-semibold animate-fadeIn ${
+                        syncStatusMsg.error ? 'bg-rose-950/60 border-rose-800 text-rose-200' : 'bg-emerald-950/60 border-emerald-800 text-emerald-200'
+                      }`}>
+                        {syncStatusMsg.text}
+                      </div>
+                    )}
+
+                    {emailSyncSaved && (
+                      <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-300 text-xs font-bold animate-fadeIn">
+                        ✅ Email filter keywords saved successfully!
+                      </div>
+                    )}
+
+                    {/* Google OAuth Card */}
+                    <div className="bg-slate-800/40 border border-slate-700/80 rounded-xl p-4 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">🔵</span>
+                          <div>
+                            <span className="text-xs font-bold text-white block">Google Workspace / Gmail Account</span>
+                            <span className="text-[11px] text-slate-400">
+                              {googleToken ? `Authorized: ${googleEmail || 'Active Gmail Session'}` : 'Not connected yet'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {!googleToken ? (
+                          <button
+                            type="button"
+                            onClick={handleConnectGmail}
+                            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs shadow transition flex items-center gap-1.5"
+                          >
+                            <span>🔵 Connect Gmail</span>
+                          </button>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={isSyncingGmail}
+                              onClick={handleSyncLiveGmail}
+                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs shadow transition flex items-center gap-1.5"
+                            >
+                              <span>{isSyncingGmail ? '⏳' : '🔄'}</span>
+                              <span>{isSyncingGmail ? 'Scanning...' : 'Scan Now'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isSyncingGmail}
+                              onClick={handleForceRescan}
+                              className="px-3.5 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold rounded-xl text-xs transition flex items-center gap-1.5"
+                              title="Clears processed cache and scans Gmail alerts into the ledger"
+                            >
+                              <span>⚡</span>
+                              <span>Force Re-Scan</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleDisconnectGmail}
+                              className="px-3 py-1.5 bg-slate-800 hover:bg-rose-950/60 hover:text-rose-200 text-slate-400 font-semibold rounded-xl text-xs border border-slate-700 transition"
+                            >
+                              Disconnect
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {googleToken && (
+                        <div className="pt-2 border-t border-slate-700/60 flex flex-wrap items-center justify-between text-[11px] text-slate-400">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={autoSyncEnabled}
+                              onChange={(e) => {
+                                setAutoSyncEnabled(e.target.checked);
+                                localStorage.setItem('fleet_auto_sync', String(e.target.checked));
+                              }}
+                              className="rounded text-amber-500"
+                            />
+                            <span>Background auto-scan (every 45s while tab is active)</span>
+                          </label>
+                          <span>{lastSyncTime ? `Last scanned: ${lastSyncTime}` : 'Scan ready'}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Filter Keywords Form */}
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        updateEmailSyncConfig({
+                          linkedEmail: syncEmail.trim(),
+                          tollEnabled: syncTollEnabled,
+                          tollSubjectFilter: syncTollSubject.trim(),
+                          fuelEnabled: syncFuelEnabled,
+                          fuelSubjectFilter: syncFuelSubject.trim(),
+                        });
+                        setEmailSyncSaved(true);
+                        setTimeout(() => setEmailSyncSaved(false), 3000);
+                      }}
+                      className="space-y-4"
+                    >
+                      <div className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <span>⚙️</span> Subject Filter Keywords (Optional)
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="bg-slate-800/40 p-3.5 rounded-xl border border-slate-700/80 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-emerald-300">FASTag / Toll Filter</span>
+                            <button
+                              type="button"
+                              onClick={() => setSyncTollEnabled(!syncTollEnabled)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${syncTollEnabled ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700'}`}
+                            >
+                              {syncTollEnabled ? '✓ Enabled' : '✕ Disabled'}
+                            </button>
+                          </div>
+                          <input
+                            type="text"
+                            placeholder="e.g. FASTag Toll Debit"
+                            value={syncTollSubject}
+                            onChange={(e) => setSyncTollSubject(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white"
+                          />
+                          <p className="text-[10px] text-slate-500">Leave blank to capture all standard FASTag alerts</p>
+                        </div>
+
+                        <div className="bg-slate-800/40 p-3.5 rounded-xl border border-slate-700/80 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-amber-300">Fuel / Diesel Filter</span>
+                            <button
+                              type="button"
+                              onClick={() => setSyncFuelEnabled(!syncFuelEnabled)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${syncFuelEnabled ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700'}`}
+                            >
+                              {syncFuelEnabled ? '✓ Enabled' : '✕ Disabled'}
+                            </button>
+                          </div>
+                          <input
+                            type="text"
+                            placeholder="e.g. Fuel Transaction Alert"
+                            value={syncFuelSubject}
+                            onChange={(e) => setSyncFuelSubject(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white"
+                          />
+                          <p className="text-[10px] text-slate-500">Leave blank to capture all standard diesel card alerts</p>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end">
+                        <button
+                          type="submit"
+                          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl border border-slate-700 shadow"
+                        >
+                          Save Subject Filters
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
+
+                {/* 4. CLOUD DATABASE */}
+                {activeTab === 'cloud' && (
+                  <div className="space-y-5 animate-fadeIn">
+                    <div className="border-b border-slate-800 pb-3">
+                      <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                        <span>☁️</span> Supabase Cloud Database & Multi-Device Sync
+                      </h4>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Your operational data is automatically synchronized to Supabase PostgreSQL for cross-device access (laptop, tablet, phone).
+                      </p>
+                    </div>
+
+                    {dbActionStatus && (
+                      <div className={`p-3.5 rounded-xl border text-xs font-semibold animate-fadeIn ${
+                        dbActionStatus.type === 'error' ? 'bg-rose-950/60 border-rose-800 text-rose-200' : 'bg-emerald-950/60 border-emerald-800 text-emerald-200'
+                      }`}>
+                        {dbActionStatus.message}
+                      </div>
+                    )}
+
+                    <div className="bg-slate-800/40 border border-slate-700/80 rounded-xl p-4 space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <span className="text-xs font-bold text-white block">Connection Status</span>
+                          <span className="text-[11px] text-slate-400">
+                            Host: <span className="font-mono text-emerald-400 font-bold">vdmfymirrdkebnwlgnqz.supabase.co</span>
+                          </span>
+                        </div>
+                        <span className="px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-bold flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                          <span>Connected (Cloud Mode)</span>
+                        </span>
+                      </div>
+
+                      <div className="text-xs text-slate-300 leading-relaxed bg-slate-900/60 p-3 rounded-xl border border-slate-800 space-y-1">
+                        <div>⚡ <strong>Real-time synchronization:</strong> Changes saved on this computer or phone are immediately upserted to Cloud PostgreSQL.</div>
+                        <div>📱 <strong>Switching Devices:</strong> When you open the application on your mobile phone or laptop browser, it automatically fetches latest cloud data.</div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-slate-700/60">
+                        <button
+                          type="button"
+                          disabled={dbActionLoading}
+                          onClick={async () => {
+                            setDbActionLoading(true);
+                            setDbActionStatus(null);
+                            try {
+                              if (pullFromCloud) await pullFromCloud();
+                              setDbActionStatus({ type: 'success', message: '✅ Cloud data successfully restored and synced to this browser!' });
+                            } catch (e) {
+                              setDbActionStatus({ type: 'error', message: `⚠️ Sync failed: ${e.message}` });
+                            } finally {
+                              setDbActionLoading(false);
+                            }
+                          }}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs shadow flex items-center gap-1.5 transition"
+                        >
+                          <span>🔄</span>
+                          <span>{dbActionLoading ? 'Pulling...' : 'Pull Latest Cloud Data'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={dbActionLoading}
+                          onClick={async () => {
+                            setDbActionLoading(true);
+                            setDbActionStatus(null);
+                            try {
+                              if (pushToCloud) await pushToCloud();
+                              setDbActionStatus({ type: 'success', message: '✅ All local fleet ledgers successfully pushed to Supabase Cloud!' });
+                            } catch (e) {
+                              setDbActionStatus({ type: 'error', message: `⚠️ Push failed: ${e.message}` });
+                            } finally {
+                              setDbActionLoading(false);
+                            }
+                          }}
+                          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs border border-slate-700 shadow flex items-center gap-1.5 transition"
+                        >
+                          <span>☁️</span>
+                          <span>Force Push All to Cloud</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 5. EXPORT DATA (CSV) */}
+                {activeTab === 'export' && (
+                  <div className="space-y-5 animate-fadeIn">
+                    <div className="border-b border-slate-800 pb-3">
+                      <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                        <span>📊</span> CSV Export & Financial Reporting
+                      </h4>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Download formatted spreadsheets for your accountant, tax filings (Section 194C TDS), and monthly audits.
+                      </p>
+                    </div>
+
+                    <div className="bg-slate-800/40 border border-slate-700/80 rounded-xl p-5 space-y-4">
+                      <div className="flex items-center gap-3">
+                        <span className="p-3 rounded-2xl bg-amber-500/10 text-amber-400 text-2xl border border-amber-500/20">
+                          📥
+                        </span>
+                        <div>
+                          <h5 className="text-sm font-bold text-white">Itemized CSV Report Generator</h5>
+                          <p className="text-xs text-slate-400">
+                            Export Trips & Revenues, Direct Expenses, Driver Payouts, or Settlement Receipts filtered by any custom date window.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onClose) onClose();
+                            if (onOpenExport) onOpenExport();
+                          }}
+                          className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs shadow-lg transition flex items-center gap-2"
+                        >
+                          <span>📊 Launch CSV Export Wizard &rarr;</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 6. ACCOUNT & SECURITY */}
+                {activeTab === 'security' && (
+                  <div className="space-y-5 animate-fadeIn">
+                    <div className="border-b border-slate-800 pb-3">
+                      <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                        <span>🔑</span> Account Credentials & Security
+                      </h4>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Manage your fleet operator login and password credentials.
+                      </p>
+                    </div>
+
+                    <div className="bg-slate-800/40 border border-slate-700/80 rounded-xl p-4 space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-700/60">
+                        <div>
+                          <span className="text-xs text-slate-400 block">Logged In User:</span>
+                          <span className="text-sm font-bold text-white font-mono">{currentUser?.username}</span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-slate-400 block">Business / Fleet:</span>
+                          <span className="text-sm font-bold text-amber-400">{currentUser?.businessName}</span>
+                        </div>
+                      </div>
+
+                      {passStatus && (
+                        <div className={`p-3 rounded-xl border text-xs font-semibold animate-fadeIn ${
+                          passStatus.type === 'error' ? 'bg-rose-950/60 border-rose-800 text-rose-200' : 'bg-emerald-950/60 border-emerald-800 text-emerald-200'
+                        }`}>
+                          {passStatus.message}
+                        </div>
+                      )}
+
+                      <form onSubmit={handleChangePass} className="space-y-3 max-w-md">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-300 mb-1">Current Password *</label>
+                          <input
+                            type="password"
+                            required
+                            placeholder="Enter current password"
+                            value={curPass}
+                            onChange={(e) => setCurPass(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-300 mb-1">New Password * (Min 6 chars)</label>
+                          <input
+                            type="password"
+                            required
+                            placeholder="Enter new password"
+                            value={newPass}
+                            onChange={(e) => setNewPass(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-300 mb-1">Confirm New Password *</label>
+                          <input
+                            type="password"
+                            required
+                            placeholder="Re-enter new password"
+                            value={confPass}
+                            onChange={(e) => setConfPass(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+                          />
+                        </div>
+                        <div className="pt-2">
+                          <button
+                            type="submit"
+                            disabled={passLoading}
+                            className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-md transition"
+                          >
+                            {passLoading ? 'Updating...' : 'Update Password'}
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  </div>
+                )}
+
+                {/* 7. PRIVACY & ERASURE */}
+                {activeTab === 'privacy' && (
+                  <div className="space-y-5 animate-fadeIn">
+                    <div className="border-b border-slate-800 pb-3">
+                      <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                        <span>🔒</span> Privacy Policy & Right to Erasure
+                      </h4>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Review your statutory data rights, purge test ledgers, or permanently close and delete your account.
+                      </p>
+                    </div>
+
+                    {/* Privacy Policy Link Card */}
+                    <div className="bg-slate-800/40 border border-slate-700/80 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <span className="text-xs font-bold text-white block">Official Fleet Privacy Policy</span>
+                        <span className="text-[11px] text-slate-400">Read our data collection, security, and statutory GDPR / DPDP compliance terms.</span>
+                      </div>
+                      <a
+                        href="/privacy.html"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-amber-400 hover:text-amber-300 font-bold text-xs rounded-xl border border-slate-700 transition flex items-center gap-1.5 shadow"
+                      >
+                        <span>🔒 View Privacy Policy</span>
+                        <span>↗</span>
+                      </a>
+                    </div>
+
+                    {/* Clear Operational Ledgers */}
+                    <div className="bg-rose-950/20 border border-rose-500/30 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+                      <div className="max-w-md">
+                        <span className="text-xs font-bold text-rose-300 block">Clear Data (Privacy Reset)</span>
+                        <span className="text-[11px] text-slate-400">
+                          Wipe operational trip ledgers, driver claims, and expenses. Keeps your truck and company master lists intact.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onClose) onClose();
+                          if (onOpenClearData) onOpenClearData();
+                        }}
+                        className="px-4 py-2 bg-rose-900/60 hover:bg-rose-800 text-rose-200 hover:text-white font-bold text-xs rounded-xl border border-rose-700/60 transition shadow"
+                      >
+                        <span>🗑️ Clear Operational Data...</span>
+                      </button>
+                    </div>
+
+                    {/* Delete Account Permanently */}
+                    <div className="bg-red-950/30 border border-red-500/50 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+                      <div className="max-w-md">
+                        <span className="text-xs font-bold text-red-400 block">Permanently Delete Account</span>
+                        <span className="text-[11px] text-slate-400">
+                          Irreversibly delete your username, all associated entity profiles, trucks, and cloud database records.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onClose) onClose();
+                          if (onOpenDeleteAccount) onOpenDeleteAccount();
+                        }}
+                        className="px-4 py-2 bg-red-700 hover:bg-red-600 text-white font-black text-xs rounded-xl shadow-lg transition flex items-center gap-1.5"
+                      >
+                        <span>👤❌ Delete Account...</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       );
     }
 
@@ -7694,15 +7786,6 @@
 
           <div className="mt-6 text-center text-xs text-slate-500 flex flex-col items-center gap-2">
             <span>AR FleetTrack &bull; Multi-Entity Enterprise Fleet Accounting</span>
-            <a 
-              href="/privacy.html" 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-xs text-amber-400/80 hover:text-amber-300 hover:underline transition-colors py-1 px-3 rounded-lg bg-slate-900/80 border border-slate-800"
-            >
-              <span>🔒 Privacy Policy</span>
-              <span className="text-[10px] text-slate-500">↗</span>
-            </a>
           </div>
         </div>
       );
@@ -7717,8 +7800,7 @@
         showExportModal, setShowExportModal
       } = useFleet();
       const [activeTab, setActiveTab] = useState('home');
-      const [showProfModal, setShowProfModal] = useState(false);
-      const [newProfName, setNewProfName] = useState('');
+      const [showSettingsModal, setShowSettingsModal] = useState(false);
       const [showClearModal, setShowClearModal] = useState(false);
       const [clearActionType, setClearActionType] = useState('ledgers'); // 'ledgers' | 'masters' | 'account'
       const [clearWipeMasters, setClearWipeMasters] = useState(false);
@@ -7740,13 +7822,6 @@
         { id: 'data_entry', label: 'Data Entry', icon: '➕' },
         { id: 'masters', label: 'Master Management', icon: '🛡️' },
       ];
-
-      const handleAddProfileSubmit = (e) => {
-        e.preventDefault();
-        if (!newProfName.trim()) return;
-        addProfile(newProfName.trim());
-        setNewProfName('');
-      };
 
       return (
         <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
@@ -7771,26 +7846,9 @@
                 </div>
               </div>
 
-              {/* User Account, Profile Switcher, New Entry & Logout */}
-              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-                {/* Active User Badge & Change Password */}
-                <div className="flex items-center gap-2 bg-slate-800/90 border border-slate-700/80 px-2.5 py-1.5 rounded-xl text-xs">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <span className="font-bold text-white font-mono">{currentUser.username}</span>
-                  <span className="text-[11px] text-slate-400 hidden lg:inline">({currentUser.businessName})</span>
-                  <button
-                    type="button"
-                    onClick={() => setShowChangePassModal(true)}
-                    title="Change Account Password"
-                    className="ml-1 px-1.5 py-0.5 rounded-md bg-slate-700/80 hover:bg-amber-500 hover:text-slate-950 text-slate-300 text-[10px] font-bold transition flex items-center gap-1"
-                  >
-                    <span>🔑</span>
-                    <span className="hidden xl:inline">Password</span>
-                  </button>
-                </div>
-
-                {/* Storage Status / Demo Badge */}
-                {currentUser?.isDemo ? (
+              {/* Settings & Logout */}
+              <div className="flex items-center gap-2 sm:gap-3">
+                {currentUser?.isDemo && (
                   <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold shadow-sm">
                     <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
                     <span>🟡 Demo Sandbox</span>
@@ -7803,37 +7861,17 @@
                       Exit
                     </button>
                   </div>
-                ) : (
-                  <div
-                    title="Connected to Supabase PostgreSQL database (vdmfymirrdkebnwlgnqz). All data is saved directly to Cloud DB."
-                    className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-950/60 border border-emerald-600/40 text-emerald-300 text-xs font-bold shadow-sm"
-                  >
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                    <span>🟢 Cloud DB Active</span>
-                  </div>
                 )}
 
-                {/* Profile Switcher */}
-                <div className="flex items-center bg-slate-800/90 border border-slate-700 rounded-xl p-1 shadow-sm">
-                  <span className="text-xs text-slate-400 px-2 font-bold hidden md:inline">Profile:</span>
-                  <select
-                    value={activeProfileId}
-                    onChange={(e) => setActiveProfileId(e.target.value)}
-                    className="bg-slate-900 text-white font-bold text-xs px-2.5 py-1.5 rounded-lg border border-slate-700"
-                  >
-                    {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                  <button
-                    onClick={() => setShowProfModal(true)}
-                    title="Manage Profiles"
-                    className="p-1.5 text-slate-400 hover:text-white rounded ml-1"
-                  >
-                    ⚙️
-                  </button>
-                </div>
-
-                <button onClick={() => setActiveTab('data_entry')} className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-md">
-                  + New Entry
+                {/* Settings Button */}
+                <button
+                  type="button"
+                  onClick={() => setShowSettingsModal(true)}
+                  title="Application Settings"
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 hover:text-amber-300 border border-slate-700 hover:border-amber-500/40 font-bold text-xs shadow-sm transition flex items-center gap-1.5"
+                >
+                  <span>⚙️</span>
+                  <span>Settings</span>
                 </button>
 
                 {/* Logout Button */}
@@ -7902,45 +7940,7 @@
             </div>
           </main>
 
-          {/* Profiles Modal */}
-          {showProfModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
-              <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl p-6">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="font-bold text-white text-base">Entity Profile Management</h3>
-                  <button onClick={() => setShowProfModal(false)} className="text-slate-400 hover:text-white">✕</button>
-                </div>
-                <form onSubmit={handleAddProfileSubmit} className="flex gap-2 mb-4">
-                  <input
-                    type="text"
-                    required
-                    placeholder="New profile name"
-                    value={newProfName}
-                    onChange={(e) => setNewProfName(e.target.value)}
-                    className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white"
-                  />
-                  <button type="submit" className="px-3 py-1.5 bg-amber-500 text-slate-950 font-bold rounded-xl text-xs">+ Add</button>
-                </form>
 
-                <div className="space-y-2 max-h-60 overflow-y-auto mb-4">
-                  {profiles.map(p => (
-                    <div key={p.id} className={`p-2.5 rounded-xl border flex justify-between items-center text-xs ${p.id === activeProfileId ? 'border-amber-500 bg-amber-500/10 text-white' : 'border-slate-800 bg-slate-800/50 text-slate-300'}`}>
-                      <div className="cursor-pointer" onClick={() => setActiveProfileId(p.id)}>
-                        <div className="font-bold">{p.name} {p.id === activeProfileId && '✓ (Active)'}</div>
-                      </div>
-                      {profiles.length > 1 && (
-                        <button onClick={() => deleteProfile(p.id)} className="text-rose-400 hover:text-white text-xs">Delete</button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-
-                <div className="flex justify-end">
-                  <button onClick={() => setShowProfModal(false)} className="px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-semibold">Done</button>
-                </div>
-              </div>
-            </div>
-          )}
 
           {/* Global Data Erasure / Clear Data Confirmation Modal */}
           {showClearModal && (
@@ -8091,6 +8091,25 @@
             </div>
           )}
 
+          {showSettingsModal && (
+            <SettingsModal
+              onClose={() => setShowSettingsModal(false)}
+              onOpenExport={() => setShowExportModal(true)}
+              onOpenClearData={(scope) => {
+                setClearActionType(scope || 'ledgers');
+                setClearWipeMasters(scope === 'masters');
+                setClearConfirmed(false);
+                setShowClearModal(true);
+              }}
+              onOpenDeleteAccount={() => {
+                setClearActionType('account');
+                setClearWipeMasters(true);
+                setClearConfirmed(false);
+                setShowClearModal(true);
+              }}
+            />
+          )}
+
           {showChangePassModal && <ChangePasswordModal onClose={() => setShowChangePassModal(false)} />}
           {showExportModal && <ExportDataModal onClose={() => setShowExportModal(false)} />}
 
@@ -8098,46 +8117,9 @@
             <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-3">
                 <span>AR FleetTrack &copy; 2026 Multi-Entity Operations</span>
-                <a
-                  href="/privacy.html"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-[11px] text-amber-400/80 hover:text-amber-300 hover:underline transition-colors"
-                >
-                  <span>🔒 Privacy Policy</span>
-                  <span className="text-[10px]">↗</span>
-                </a>
               </div>
               <div className="flex flex-wrap items-center gap-2.5">
                 <span className="font-mono text-[11px] text-slate-400">Section 194C TDS &bull; 15% Net Commission &bull; Universal Edit/Delete</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setClearActionType('ledgers');
-                    setClearWipeMasters(false);
-                    setClearConfirmed(false);
-                    setShowClearModal(true);
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-rose-950/40 hover:bg-rose-900/80 text-rose-300 hover:text-white border border-rose-800/60 font-semibold text-[11px] transition flex items-center gap-1.5"
-                  title="Clear operational data in compliance with Privacy Policy notes (Right to Erasure)"
-                >
-                  <span>🗑️</span>
-                  <span>Clear Data (Privacy Reset)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setClearActionType('account');
-                    setClearWipeMasters(true);
-                    setClearConfirmed(false);
-                    setShowClearModal(true);
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-red-950/60 hover:bg-red-900 text-red-300 hover:text-white border border-red-700/80 font-semibold text-[11px] transition flex items-center gap-1.5 shadow-sm"
-                  title="Permanently terminate and delete your account and all associated data"
-                >
-                  <span>👤❌</span>
-                  <span>Delete Account</span>
-                </button>
               </div>
             </div>
           </footer>
