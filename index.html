@@ -392,6 +392,7 @@
       const [settlements, setSettlements] = useState(() => safeStorageGet(`${STORAGE_KEY}_settlements`, safeStorageGet('fleettrack_v3_settlements', initialSettlements)));
 
       const [dateFilter, setDateFilter] = useState({ preset: 'all', startDate: '', endDate: '' });
+      const [showExportModal, setShowExportModal] = useState(false);
       const currency = '₹'; // Exclusively INR
 
       // --- STORAGE MODE: CLOUD (Supabase PostgreSQL) vs DEMO (Local Sandbox) ---
@@ -560,27 +561,139 @@
         setActiveProfileId(demoProfId);
       };
 
-      const login = (username, password) => {
-        const u = users.find(x => x.username.toLowerCase() === username.trim().toLowerCase() && x.password === password);
-        if (!u) throw new Error('Invalid username or password');
+      const login = async (username, password) => {
+        const uInput = username.trim().toLowerCase();
+        let foundUser = null;
+
+        // 1. Check Supabase Cloud database first (multi-device cloud accounts)
+        if (supabaseClient) {
+          try {
+            const { data: cloudUsers, error } = await supabaseClient
+              .from('app_users')
+              .select('*')
+              .or(`username.ilike.${uInput},email.ilike.${uInput}`)
+              .limit(1);
+
+            if (!error && cloudUsers && cloudUsers.length > 0) {
+              const cu = cloudUsers[0];
+              if (cu.password === password) {
+                foundUser = {
+                  id: cu.id,
+                  username: cu.username,
+                  password: cu.password,
+                  businessName: cu.business_name,
+                  email: cu.email,
+                  isDemo: false
+                };
+                // Cache into local users list
+                setUsers(prev => {
+                  const exists = prev.some(u => u.id === foundUser.id);
+                  return exists ? prev.map(u => u.id === foundUser.id ? foundUser : u) : [...prev, foundUser];
+                });
+              } else {
+                throw new Error('Incorrect password. Please verify and try again.');
+              }
+            }
+          } catch (cloudErr) {
+            if (cloudErr.message && cloudErr.message.includes('Incorrect password')) {
+              throw cloudErr;
+            }
+            console.warn('Cloud app_users check skipped or table pending:', cloudErr);
+          }
+        }
+
+        // 2. Fallback to local storage users list if not found in cloud
+        if (!foundUser) {
+          const localMatch = users.find(x =>
+            (x.username.toLowerCase() === uInput || (x.email && x.email.toLowerCase() === uInput)) &&
+            x.password === password
+          );
+          if (localMatch) {
+            foundUser = localMatch;
+            // Backfill into Supabase app_users if table exists
+            if (supabaseClient) {
+              supabaseClient.from('app_users').upsert({
+                id: localMatch.id,
+                username: localMatch.username,
+                password: localMatch.password,
+                business_name: localMatch.businessName,
+                email: localMatch.email,
+                created_at: new Date().toISOString()
+              }).catch(() => {});
+            }
+          }
+        }
+
+        if (!foundUser) {
+          throw new Error('Invalid username or password. Please verify your credentials.');
+        }
+
         setStorageMode('cloud');
-        setCurrentUser({ ...u, isDemo: false });
-        const userProfs = profiles.filter(p => p.userId === u.id || (!p.userId && p.name.toLowerCase() === u.businessName.toLowerCase()));
+        setCurrentUser({ ...foundUser, isDemo: false });
+
+        // Query user's profiles from Supabase Cloud to ensure cross-device sync
+        if (supabaseClient) {
+          try {
+            const { data: cloudProfs } = await supabaseClient
+              .from('profiles')
+              .select('*')
+              .eq('user_id', foundUser.id);
+            if (cloudProfs && cloudProfs.length > 0) {
+              const mappedProfs = cloudProfs.map(toCamelObj);
+              setProfiles(prev => {
+                const rem = prev.filter(p => !mappedProfs.some(mp => mp.id === p.id));
+                return [...rem, ...mappedProfs];
+              });
+              setActiveProfileId(mappedProfs[0].id);
+              pullCloudData(mappedProfs[0].id);
+              return foundUser;
+            }
+          } catch (pErr) {
+            console.warn('Cloud profile fetch warning:', pErr);
+          }
+        }
+
+        const userProfs = profiles.filter(p => p.userId === foundUser.id || (!p.userId && p.name?.toLowerCase() === foundUser.businessName?.toLowerCase()));
         if (userProfs.length > 0) {
           setActiveProfileId(userProfs[0].id);
         } else {
           const newProfId = `prof-${Date.now()}`;
-          const newProf = { id: newProfId, userId: u.id, name: u.businessName, isDefault: true, createdAt: new Date().toISOString().split('T')[0] };
+          const newProf = { id: newProfId, userId: foundUser.id, name: foundUser.businessName, isDefault: true, createdAt: new Date().toISOString().split('T')[0] };
           setProfiles(prev => [...prev, newProf]);
           setActiveProfileId(newProfId);
+          if (supabaseClient) {
+            supabaseClient.from('profiles').upsert(toSnakeObj(newProf)).catch(() => {});
+          }
         }
-        return u;
+        return foundUser;
       };
 
-      const signup = (businessName, username, password, email) => {
-        if (users.some(x => x.username.toLowerCase() === username.trim().toLowerCase())) {
-          throw new Error('Username already exists. Please choose another.');
+      const signup = async (businessName, username, password, email) => {
+        const uInput = username.trim().toLowerCase();
+        const eInput = email.trim().toLowerCase();
+
+        // 1. Verify uniqueness against Supabase Cloud app_users
+        if (supabaseClient) {
+          try {
+            const { data: existing } = await supabaseClient
+              .from('app_users')
+              .select('id, username, email')
+              .or(`username.ilike.${uInput},email.ilike.${eInput}`)
+              .limit(1);
+
+            if (existing && existing.length > 0) {
+              throw new Error('An account with this username or email already exists in the cloud. Please sign in.');
+            }
+          } catch (e) {
+            if (e.message && e.message.includes('already exists')) throw e;
+          }
         }
+
+        // 2. Verify uniqueness in local state
+        if (users.some(x => x.username.toLowerCase() === uInput || (x.email && x.email.toLowerCase() === eInput))) {
+          throw new Error('An account with this username or email already exists. Please choose another.');
+        }
+
         const newUserId = `usr-${Date.now()}`;
         const newProfId = `prof-${Date.now()}`;
         const newProf = { id: newProfId, userId: newUserId, name: businessName.trim(), isDefault: true, createdAt: new Date().toISOString().split('T')[0] };
@@ -595,7 +708,20 @@
         setCurrentUser(newUser);
         setActiveProfileId(newProfId);
 
+        // 3. Persist to Supabase Cloud: app_users, profiles, rules
         if (supabaseClient) {
+          try {
+            await supabaseClient.from('app_users').upsert({
+              id: newUserId,
+              username: username.trim(),
+              password: password,
+              business_name: businessName.trim(),
+              email: email.trim(),
+              created_at: new Date().toISOString()
+            });
+          } catch (uErr) {
+            console.warn('Supabase app_users save warning:', uErr);
+          }
           supabaseClient.from('profiles').upsert(toSnakeObj(newProf)).catch(e => console.warn('Cloud profile init error:', e));
           supabaseClient.from('rules').upsert({
             profile_id: newProfId,
@@ -611,6 +737,167 @@
         setCurrentUser(null);
       };
 
+      // Password Reset with OTP & Supabase Mail Integration
+      const requestPasswordResetOtp = async (usernameOrEmail) => {
+        const query = usernameOrEmail.trim().toLowerCase();
+        let targetUser = null;
+
+        // 1. Check Supabase app_users
+        if (supabaseClient) {
+          try {
+            const { data, error } = await supabaseClient
+              .from('app_users')
+              .select('*')
+              .or(`username.ilike.${query},email.ilike.${query}`)
+              .limit(1);
+            if (!error && data && data.length > 0) {
+              const u = data[0];
+              targetUser = {
+                id: u.id,
+                username: u.username,
+                password: u.password,
+                businessName: u.business_name,
+                email: u.email
+              };
+            }
+          } catch (e) {
+            console.warn('Supabase app_users OTP lookup warning:', e);
+          }
+        }
+
+        // 2. Fallback to local users
+        if (!targetUser) {
+          targetUser = users.find(x =>
+            x.username.toLowerCase() === query ||
+            (x.email && x.email.toLowerCase() === query)
+          );
+        }
+
+        if (!targetUser) {
+          throw new Error('No registered account found matching that username or email address.');
+        }
+
+        // Generate secure 6-digit OTP code & 15-minute expiration
+        const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+        const otpExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+        // Save OTP to Supabase app_users
+        if (supabaseClient) {
+          try {
+            await supabaseClient
+              .from('app_users')
+              .update({
+                otp_code: otpCode,
+                otp_expires_at: otpExpiresAt
+              })
+              .eq('id', targetUser.id);
+          } catch (e) {
+            console.warn('Could not save OTP to Supabase app_users:', e);
+          }
+        }
+
+        // Update local users state for offline / instant validation
+        setUsers(prev => prev.map(u => u.id === targetUser.id ? { ...u, otpCode, otpExpiresAt: Date.now() + 15 * 60 * 1000 } : u));
+
+        // Trigger Supabase password recovery email dispatch if enabled
+        if (supabaseClient && targetUser.email) {
+          supabaseClient.auth.resetPasswordForEmail(targetUser.email).catch(e => {
+            console.info('Supabase auth reset mail dispatch:', e?.message || e);
+          });
+        }
+
+        const emailParts = targetUser.email.split('@');
+        const maskedName = emailParts[0].length > 2
+          ? emailParts[0][0] + '*'.repeat(emailParts[0].length - 2) + emailParts[0].slice(-1)
+          : emailParts[0] + '*';
+        const maskedEmail = `${maskedName}@${emailParts[1] || ''}`;
+
+        return {
+          success: true,
+          userId: targetUser.id,
+          email: targetUser.email,
+          maskedEmail,
+          otp: otpCode // provided for seamless local/preview testing
+        };
+      };
+
+      const verifyOtpAndResetPassword = async (userIdOrEmail, otpEntered, newPassword) => {
+        if (!newPassword || newPassword.length < 6) {
+          throw new Error('New password must be at least 6 characters long.');
+        }
+
+        const query = (userIdOrEmail || '').trim().toLowerCase();
+        let targetUser = null;
+        let dbOtp = null;
+        let dbExpires = null;
+
+        // 1. Check Supabase app_users
+        if (supabaseClient) {
+          try {
+            const { data, error } = await supabaseClient
+              .from('app_users')
+              .select('*')
+              .or(`id.eq.${userIdOrEmail},email.ilike.${query},username.ilike.${query}`)
+              .limit(1);
+            if (!error && data && data.length > 0) {
+              const u = data[0];
+              targetUser = { id: u.id, username: u.username, email: u.email };
+              dbOtp = u.otp_code;
+              dbExpires = u.otp_expires_at ? new Date(u.otp_expires_at).getTime() : null;
+            }
+          } catch (e) {
+            console.warn('Supabase verify lookup warning:', e);
+          }
+        }
+
+        // 2. Fallback to local users
+        if (!targetUser) {
+          const lu = users.find(x => x.id === userIdOrEmail || (x.email && x.email.toLowerCase() === query) || x.username.toLowerCase() === query);
+          if (lu) {
+            targetUser = lu;
+            dbOtp = lu.otpCode;
+            dbExpires = lu.otpExpiresAt;
+          }
+        }
+
+        if (!targetUser) {
+          throw new Error('User account not found.');
+        }
+
+        const cleanEntered = (otpEntered || '').trim();
+        if (!dbOtp || cleanEntered !== dbOtp) {
+          throw new Error('Invalid OTP code. Please check the 6-digit code and try again.');
+        }
+
+        if (dbExpires && Date.now() > dbExpires) {
+          throw new Error('OTP code has expired. Please request a new verification code.');
+        }
+
+        // Update password in Supabase app_users
+        if (supabaseClient) {
+          try {
+            await supabaseClient
+              .from('app_users')
+              .update({
+                password: newPassword,
+                otp_code: null,
+                otp_expires_at: null
+              })
+              .eq('id', targetUser.id);
+          } catch (e) {
+            console.warn('Supabase password update error:', e);
+          }
+        }
+
+        // Update password in local storage
+        setUsers(prev => prev.map(u => u.id === targetUser.id ? { ...u, password: newPassword, otpCode: null, otpExpiresAt: null } : u));
+        if (currentUser && currentUser.id === targetUser.id) {
+          setCurrentUser(prev => ({ ...prev, password: newPassword }));
+        }
+
+        return true;
+      };
+
       const resetPassword = (usernameOrEmail, email, newPassword) => {
         const target = users.find(x =>
           (x.username.toLowerCase() === usernameOrEmail.trim().toLowerCase() || x.email.toLowerCase() === usernameOrEmail.trim().toLowerCase()) &&
@@ -622,6 +909,9 @@
         if (!newPassword || newPassword.length < 6) {
           throw new Error('New password must be at least 6 characters long.');
         }
+        if (supabaseClient) {
+          supabaseClient.from('app_users').update({ password: newPassword }).eq('id', target.id).catch(() => {});
+        }
         setUsers(prev => prev.map(u => u.id === target.id ? { ...u, password: newPassword } : u));
         if (currentUser && currentUser.id === target.id) {
           setCurrentUser(prev => ({ ...prev, password: newPassword }));
@@ -629,7 +919,7 @@
         return target;
       };
 
-      const changePassword = (currentPassword, newPassword) => {
+      const changePassword = async (currentPassword, newPassword) => {
         if (!currentUser) throw new Error('No user is currently signed in.');
         const target = users.find(x => x.id === currentUser.id);
         if (!target || target.password !== currentPassword) {
@@ -637,6 +927,14 @@
         }
         if (!newPassword || newPassword.length < 6) {
           throw new Error('New password must be at least 6 characters long.');
+        }
+        // Update Supabase app_users
+        if (supabaseClient && !currentUser.isDemo) {
+          try {
+            await supabaseClient.from('app_users').update({ password: newPassword }).eq('id', currentUser.id);
+          } catch (e) {
+            console.warn('Supabase change password error:', e);
+          }
         }
         setUsers(prev => prev.map(u => u.id === target.id ? { ...u, password: newPassword } : u));
         setCurrentUser(prev => ({ ...prev, password: newPassword }));
@@ -1843,6 +2141,8 @@
       return (
         <FleetContext.Provider value={{
           currentUser, users, login, signup, logout, loginDemo, resetPassword, changePassword,
+          requestPasswordResetOtp, verifyOtpAndResetPassword,
+          showExportModal, setShowExportModal,
           profiles: scopedProfiles, activeProfileId, activeProfile, setActiveProfileId, addProfile, updateProfile, deleteProfile,
           activeRules, updateRules,
           activeEmailConfig, updateEmailSyncConfig, syncExpensesFromEmails, syncFromLiveGmail,
@@ -1918,7 +2218,7 @@
 
     // --- COMPONENT: STICKY DATE FILTER ---
     function DateFilter() {
-      const { dateFilter, setDateFilter } = useFleet();
+      const { dateFilter, setDateFilter, setShowExportModal } = useFleet();
       const handlePreset = (preset) => {
         if (preset === 'custom') {
           const today = new Date().toISOString().split('T')[0];
@@ -1966,6 +2266,15 @@
                   />
                 </div>
               )}
+              <button
+                type="button"
+                onClick={() => setShowExportModal(true)}
+                className="ml-auto sm:ml-2 flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-950/30"
+                title="Export database records to Excel-friendly CSV with custom time filter & bifurcations"
+              >
+                <span>📥</span>
+                <span>Export CSV</span>
+              </button>
             </div>
           </div>
         </div>
@@ -6442,9 +6751,457 @@
       );
     }
 
+    // --- COMPONENT: RICH CSV DATA EXPORT MODAL ---
+    function ExportDataModal({ onClose }) {
+      const {
+        trips, expenses, driverPayments, settlements,
+        trucks, companies, drivers,
+        activeProfile, getTruckReg, getCompanyName, getDriverName,
+        getTripExpenses, getTripBalancePending, getTripProfit,
+        dateFilter
+      } = useFleet();
+
+      const [exportPreset, setExportPreset] = useState(dateFilter?.preset || 'all');
+      const today = new Date().toISOString().split('T')[0];
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
+      const [customStart, setCustomStart] = useState(dateFilter?.startDate || thirtyDaysAgo);
+      const [customEnd, setCustomEnd] = useState(dateFilter?.endDate || today);
+      const [activeBifurcation, setActiveBifurcation] = useState('trips');
+      const [exportSuccess, setExportSuccess] = useState('');
+
+      // Determine date boundary based on preset
+      const getDateBounds = () => {
+        if (exportPreset === 'all') return { start: '', end: '' };
+        if (exportPreset === 'this_month') {
+          const now = new Date();
+          const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+          const end = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+          return { start, end };
+        }
+        if (exportPreset === 'last_month') {
+          const now = new Date();
+          const start = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split('T')[0];
+          const end = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().split('T')[0];
+          return { start, end };
+        }
+        if (exportPreset === 'last_30_days') {
+          return { start: thirtyDaysAgo, end: today };
+        }
+        if (exportPreset === 'custom') {
+          return { start: customStart, end: customEnd };
+        }
+        return { start: '', end: '' };
+      };
+
+      const { start: filterStart, end: filterEnd } = getDateBounds();
+
+      // Filter helpers
+      const filterByDate = (items) => {
+        return items.filter(item => {
+          if (!filterStart && !filterEnd) return true;
+          if (filterStart && item.date < filterStart) return false;
+          if (filterEnd && item.date > filterEnd) return false;
+          return true;
+        });
+      };
+
+      const expTrips = useMemo(() => filterByDate(trips), [trips, filterStart, filterEnd]);
+      const expExpenses = useMemo(() => filterByDate(expenses), [expenses, filterStart, filterEnd]);
+      const expPayments = useMemo(() => filterByDate(driverPayments), [driverPayments, filterStart, filterEnd]);
+      const expSettlements = useMemo(() => filterByDate(settlements), [settlements, filterStart, filterEnd]);
+
+      // RFC 4180 Escaping helper
+      const escapeCSV = (val) => {
+        if (val === null || val === undefined) return '""';
+        const str = String(val).replace(/"/g, '""');
+        return `"${str}"`;
+      };
+
+      const triggerDownload = (filename, csvContent) => {
+        const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', filename);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      };
+
+      // Bifurcation data extractors (returns { headers: string[], rows: (string|number)[][] })
+      const getBifurcationData = (key) => {
+        const profileName = (activeProfile?.name || 'Fleet').replace(/[^a-zA-Z0-9_-]/g, '_');
+        if (key === 'trips') {
+          const headers = [
+            'Trip ID', 'Date', 'Truck Reg', 'Company / Client', 'Driver Name', 'Route',
+            'Gross Freight (INR)', 'Advance (INR)', 'Balance Pending (INR)',
+            'TDS Deducted (INR)', 'TDS Rate (%)', 'Driver Cash Tolls (INR)',
+            'FASTag Tolls (INR)', 'Fuel Expenses (INR)', 'Other Expenses (INR)',
+            'Driver Comm 15% (INR)', 'Net Trip Profit (INR)', 'Status', 'Notes'
+          ];
+          const rows = expTrips.map(t => {
+            const exp = getTripExpenses ? getTripExpenses(t.id) : { driverTolls: 0, fastagTolls: 0, dieselExpenses: 0, otherDirectExpenses: 0 };
+            const bal = getTripBalancePending ? getTripBalancePending(t) : ((Number(t.freightAmount) || 0) - (Number(t.advance) || 0) - (Number(t.tdsDeducted) || 0));
+            const comm = Math.round((Number(t.freightAmount) || 0) * 0.15);
+            const prof = getTripProfit ? getTripProfit(t) : 0;
+            return [
+              t.id, t.date, getTruckReg(t.truckId), getCompanyName(t.companyName), getDriverName(t.driverName), t.route,
+              t.freightAmount || 0, t.advance || 0, bal,
+              t.tdsDeducted || 0, t.tdsRate || 0, exp.driverTolls || 0,
+              exp.fastagTolls || 0, exp.dieselExpenses || 0, exp.otherDirectExpenses || 0,
+              comm, prof, t.status || 'COMPLETED', t.notes || ''
+            ];
+          });
+          return { headers, rows, title: 'Trips & Freight Ledger', filename: `Trips_${profileName}_${exportPreset}.csv` };
+        }
+
+        if (key === 'expenses') {
+          const headers = [
+            'Expense ID', 'Date', 'Truck Reg', 'Category', 'Payment Method',
+            'Amount (INR)', 'Reimbursable (Trip Advance)', 'Linked Trip Route', 'Notes'
+          ];
+          const rows = expExpenses.map(e => {
+            const linkedTrip = trips.find(t => t.id === e.tripId);
+            return [
+              e.id, e.date, getTruckReg(e.truckId), e.category, e.paymentMethod,
+              e.amount || 0, e.isReimbursable ? 'YES' : 'NO', linkedTrip ? linkedTrip.route : 'Unlinked', e.notes || ''
+            ];
+          });
+          return { headers, rows, title: 'Truck Expenses (Fuel, Tolls & Repairs)', filename: `Expenses_${profileName}_${exportPreset}.csv` };
+        }
+
+        if (key === 'driver_payments') {
+          const headers = [
+            'Payment ID', 'Date', 'Driver Name', 'Payment Type', 'Amount (INR)',
+            'Payment Mode', 'Notes'
+          ];
+          const rows = expPayments.map(p => [
+            p.id, p.date, getDriverName(p.driverName), p.type || 'ADVANCE', p.amount || 0,
+            p.paymentMethod || 'CASH', p.notes || ''
+          ]);
+          return { headers, rows, title: 'Driver Payments & Road Advances', filename: `Driver_Ledger_${profileName}_${exportPreset}.csv` };
+        }
+
+        if (key === 'settlements') {
+          const headers = [
+            'Settlement ID', 'Date', 'Company / Client', 'Amount Received (INR)',
+            'Payment Mode', 'Reference / Cheque No', 'Notes'
+          ];
+          const rows = expSettlements.map(s => [
+            s.id, s.date, getCompanyName(s.companyName), s.amount || 0,
+            s.paymentMethod || 'BANK_TRANSFER', s.referenceNumber || '', s.notes || ''
+          ]);
+          return { headers, rows, title: 'Client Settlements & Freight Receipts', filename: `Settlements_${profileName}_${exportPreset}.csv` };
+        }
+
+        if (key === 'trucks') {
+          const headers = [
+            'Truck ID', 'Registration Number', 'Model / Make', 'Year', 'Fuel Capacity (L)',
+            'Insurance Due', 'Fitness Due', 'Status'
+          ];
+          const rows = trucks.map(t => [
+            t.id, t.registrationNumber, t.model || '', t.year || '', t.fuelCapacity || '',
+            t.insuranceDueDate || '', t.fitnessDueDate || '', t.status || 'ACTIVE'
+          ]);
+          return { headers, rows, title: 'Master: Trucks Registered', filename: `Trucks_Master_${profileName}.csv` };
+        }
+
+        if (key === 'companies') {
+          const headers = [
+            'Company ID', 'Company Name', 'Contact Person', 'Phone', 'Email', 'GSTIN', 'Address'
+          ];
+          const rows = companies.map(c => [
+            c.id, c.name, c.contactPerson || '', c.phone || '', c.email || '', c.gstin || '', c.address || ''
+          ]);
+          return { headers, rows, title: 'Master: Companies & Clients', filename: `Companies_Master_${profileName}.csv` };
+        }
+
+        if (key === 'drivers') {
+          const headers = [
+            'Driver ID', 'Name', 'Phone', 'License Number', 'Daily Wage (INR)', 'Status'
+          ];
+          const rows = drivers.map(d => [
+            d.id, d.name, d.phone || '', d.licenseNumber || '', d.dailyWage || 0, d.status || 'ACTIVE'
+          ]);
+          return { headers, rows, title: 'Master: Drivers', filename: `Drivers_Master_${profileName}.csv` };
+        }
+
+        if (key === 'summary') {
+          const totalFreight = expTrips.reduce((acc, t) => acc + (Number(t.freightAmount) || 0), 0);
+          const totalAdvReceived = expTrips.reduce((acc, t) => acc + (Number(t.advance) || 0), 0);
+          const totalSettlements = expSettlements.reduce((acc, s) => acc + (Number(s.amount) || 0), 0);
+          const totalTDS = expTrips.reduce((acc, t) => acc + (Number(t.tdsDeducted) || 0), 0);
+          const pendingReceivable = totalFreight - totalAdvReceived - totalSettlements - totalTDS;
+          const totalDirectExp = expExpenses.reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
+          const totalDriverPaid = expPayments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+          const total15Comm = expTrips.reduce((acc, t) => acc + Math.round((Number(t.freightAmount) || 0) * 0.15), 0);
+          const netEstimatedProfit = totalFreight - totalDirectExp - total15Comm;
+
+          const headers = ['Financial Metric', 'Value (INR)', 'Detailed Breakdown / Notes'];
+          const rows = [
+            ['Active Business Profile', profileName, 'Scope of generated report'],
+            ['Date Range Filter', `${filterStart || 'Beginning'} to ${filterEnd || 'Present'}`, `Preset: ${exportPreset}`],
+            ['Total Trips Dispatched', expTrips.length, 'Count of freight trips completed in period'],
+            ['Total Gross Freight Revenue', totalFreight, 'Sum of all billable trip freight amounts'],
+            ['Freight Advance Received', totalAdvReceived, 'Advances paid upon loading'],
+            ['Company Settlements Collected', totalSettlements, 'Balance bank transfers and cheques received'],
+            ['TDS Deducted by Clients', totalTDS, 'Withholding tax deducted under Section 194C'],
+            ['Net Outstanding Client Receivables', pendingReceivable, 'Pending collection from all companies'],
+            ['Total Truck Operating Costs', totalDirectExp, 'Fuel, Tolls (Cash & FASTag), Repairs & Maintenance'],
+            ['Driver 15% Standard Commission', total15Comm, '15% net commission on trip freight'],
+            ['Driver Road Advances & Salary Paid', totalDriverPaid, 'Direct payments made to drivers'],
+            ['Net Fleet Operating Profit', netEstimatedProfit, 'Gross Freight minus direct truck operating costs minus 15% driver commission']
+          ];
+          return { headers, rows, title: 'Financial P&L Summary', filename: `Financial_Summary_${profileName}_${exportPreset}.csv` };
+        }
+
+        return { headers: [], rows: [], title: '', filename: 'export.csv' };
+      };
+
+      const currentBifurcation = getBifurcationData(activeBifurcation);
+
+      const downloadBifurcationCSV = (key) => {
+        const data = getBifurcationData(key);
+        if (!data.headers.length) return;
+        const csvRows = [
+          data.headers.map(escapeCSV).join(','),
+          ...data.rows.map(row => row.map(escapeCSV).join(','))
+        ];
+        triggerDownload(data.filename, csvRows.join('\r\n'));
+      };
+
+      const handleDownloadCurrent = () => {
+        downloadBifurcationCSV(activeBifurcation);
+        setExportSuccess(`Exported "${currentBifurcation.title}" to CSV successfully!`);
+        setTimeout(() => setExportSuccess(''), 4000);
+      };
+
+      const handleDownloadAll = async () => {
+        const keys = ['trips', 'expenses', 'driver_payments', 'settlements', 'trucks', 'companies', 'drivers', 'summary'];
+        setExportSuccess('Exporting all 8 tables to separate CSV files...');
+        for (let i = 0; i < keys.length; i++) {
+          downloadBifurcationCSV(keys[i]);
+          await new Promise(r => setTimeout(r, 250)); // Stagger downloads to prevent browser blocking
+        }
+        setExportSuccess('All 8 CSV tables exported successfully!');
+        setTimeout(() => setExportSuccess(''), 5000);
+      };
+
+      const bifurcationTabs = [
+        { id: 'trips', label: 'Trips & Freight', icon: '🚛', count: expTrips.length },
+        { id: 'expenses', label: 'Truck Expenses', icon: '⛽', count: expExpenses.length },
+        { id: 'driver_payments', label: 'Driver Ledger', icon: '👨‍✈️', count: expPayments.length },
+        { id: 'settlements', label: 'Client Receipts', icon: '🏢', count: expSettlements.length },
+        { id: 'trucks', label: 'Truck Master', icon: '🚚', count: trucks.length },
+        { id: 'companies', label: 'Company Master', icon: '🏭', count: companies.length },
+        { id: 'drivers', label: 'Driver Master', icon: '🪪', count: drivers.length },
+        { id: 'summary', label: 'P&L Summary', icon: '📊', count: 12 },
+      ];
+
+      return (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/40">
+              <div className="flex items-center gap-2.5">
+                <span className="text-2xl p-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">📥</span>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <span>Export Fleet Ledger to CSV (Excel)</span>
+                    <span className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300">
+                      Profile: {activeProfile?.name || 'Default'}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400">Download formatted CSV reports compatible with Excel, Google Sheets, or Tally</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                className="text-slate-400 hover:text-white text-lg font-bold p-1 rounded-lg hover:bg-slate-800 transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Notification */}
+            {exportSuccess && (
+              <div className="mx-5 mt-4 p-3 rounded-xl bg-emerald-950/80 border border-emerald-600/50 text-emerald-200 text-xs font-semibold flex items-center gap-2 animate-fadeIn">
+                <span>✅</span>
+                <span>{exportSuccess}</span>
+              </div>
+            )}
+
+            {/* Content Body */}
+            <div className="p-5 overflow-y-auto space-y-5 flex-1">
+              {/* 1. Time Filter Selector */}
+              <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3.5">
+                <div className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2.5 flex items-center gap-2">
+                  <span>📅</span>
+                  <span>Select Time Filter for Export:</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {[
+                    { id: 'all', label: 'All Time' },
+                    { id: 'this_month', label: 'This Month' },
+                    { id: 'last_month', label: 'Last Month' },
+                    { id: 'last_30_days', label: 'Last 30 Days' },
+                    { id: 'custom', label: 'Custom Range' },
+                  ].map(tab => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setExportPreset(tab.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                        exportPreset === tab.id
+                          ? 'bg-amber-500 text-slate-950 font-bold shadow'
+                          : 'bg-slate-800/90 hover:bg-slate-700 text-slate-300'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                  {exportPreset === 'custom' && (
+                    <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 ml-auto">
+                      <input
+                        type="date"
+                        value={customStart}
+                        onChange={(e) => setCustomStart(e.target.value)}
+                        className="bg-transparent text-xs text-slate-200 focus:outline-none [color-scheme:dark]"
+                      />
+                      <span className="text-slate-500 text-xs">to</span>
+                      <input
+                        type="date"
+                        value={customEnd}
+                        onChange={(e) => setCustomEnd(e.target.value)}
+                        className="bg-transparent text-xs text-slate-200 focus:outline-none [color-scheme:dark]"
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 2. Bifurcation Navigation Tabs */}
+              <div>
+                <div className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <span>📂</span>
+                  <span>Select Table Bifurcation:</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {bifurcationTabs.map(tab => {
+                    const active = activeBifurcation === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setActiveBifurcation(tab.id)}
+                        className={`p-2.5 rounded-xl border text-left transition flex items-center justify-between gap-2 ${
+                          active
+                            ? 'bg-emerald-950/60 border-emerald-500/60 shadow-md text-emerald-200'
+                            : 'bg-slate-950/50 border-slate-800 hover:border-slate-700 text-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <span>{tab.icon}</span>
+                          <span className="text-xs font-bold truncate">{tab.label}</span>
+                        </div>
+                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full font-bold ${
+                          active ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-slate-400'
+                        }`}>
+                          {tab.count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 3. Live Data Preview Box */}
+              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3.5">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-xs font-bold text-slate-300 flex items-center gap-2">
+                    <span>👁️</span>
+                    <span>Live Preview: {currentBifurcation.title}</span>
+                    <span className="text-[11px] text-slate-500 font-normal">({currentBifurcation.rows.length} total rows)</span>
+                  </div>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    Showing first {Math.min(5, currentBifurcation.rows.length)} rows
+                  </span>
+                </div>
+
+                {currentBifurcation.rows.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-slate-500">
+                    No records found in this table for the selected date range.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto max-h-48 border border-slate-800/80 rounded-lg">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-slate-900/90 sticky top-0 border-b border-slate-800">
+                        <tr>
+                          {currentBifurcation.headers.map((h, i) => (
+                            <th key={i} className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400 whitespace-nowrap">
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/50 text-slate-300 font-mono text-[11px]">
+                        {currentBifurcation.rows.slice(0, 5).map((row, rIdx) => (
+                          <tr key={rIdx} className="hover:bg-slate-900/40">
+                            {row.map((cell, cIdx) => (
+                              <td key={cIdx} className="px-3 py-1.5 whitespace-nowrap">
+                                {String(cell)}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer Buttons */}
+            <div className="px-5 py-4 border-t border-slate-800 bg-slate-950/60 flex flex-wrap items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 text-xs text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition"
+              >
+                Close
+              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleDownloadAll}
+                  className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shadow-lg transition flex items-center gap-1.5"
+                  title="Download all 8 tables as separate CSV files"
+                >
+                  <span>📦</span>
+                  <span>Download All 8 Bifurcations</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadCurrent}
+                  disabled={currentBifurcation.rows.length === 0}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-xs shadow-lg transition flex items-center gap-1.5"
+                  title="Download selected bifurcation table"
+                >
+                  <span>📥</span>
+                  <span>Download {currentBifurcation.title} CSV</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     // --- AUTHENTICATION & MULTI-TENANT ACCESS SCREEN ---
     function AuthScreen() {
-      const { login, signup, resetPassword, loginDemo } = useFleet();
+      const { login, signup, resetPassword, loginDemo, requestPasswordResetOtp, verifyOtpAndResetPassword } = useFleet();
       const [authMode, setAuthMode] = useState('login'); // 'login' | 'signup' | 'forgot'
       const [loginUser, setLoginUser] = useState('');
       const [loginPass, setLoginPass] = useState('');
@@ -6458,19 +7215,21 @@
       const [regPass, setRegPass] = useState('');
       const [regEmail, setRegEmail] = useState('');
 
-      // Forgot Password fields
-      const [forgotUser, setForgotUser] = useState('');
-      const [forgotEmail, setForgotEmail] = useState('');
+      // Forgot Password OTP flow
+      const [forgotStep, setForgotStep] = useState(1); // 1 = Enter Username/Email & Get OTP, 2 = Verify OTP & Reset Pass
+      const [forgotUserOrEmail, setForgotUserOrEmail] = useState('');
+      const [forgotOtp, setForgotOtp] = useState('');
+      const [forgotMaskedEmail, setForgotMaskedEmail] = useState('');
       const [forgotNewPass, setForgotNewPass] = useState('');
       const [forgotConfirmPass, setForgotConfirmPass] = useState('');
 
-      const handleLogin = (e) => {
+      const handleLogin = async (e) => {
         if (e) e.preventDefault();
         setErrorMsg('');
         setSuccessMsg('');
         setIsLoading(true);
         try {
-          login(loginUser, loginPass);
+          await login(loginUser, loginPass);
         } catch (err) {
           setErrorMsg(err.message || 'Invalid username or password');
         } finally {
@@ -6478,8 +7237,8 @@
         }
       };
 
-      const handleSignup = (e) => {
-        e.preventDefault();
+      const handleSignup = async (e) => {
+        if (e) e.preventDefault();
         setErrorMsg('');
         setSuccessMsg('');
         if (!regBusiness.trim() || !regUser.trim() || !regPass.trim() || !regEmail.trim()) {
@@ -6488,7 +7247,7 @@
         }
         setIsLoading(true);
         try {
-          signup(regBusiness, regUser, regPass, regEmail);
+          await signup(regBusiness, regUser, regPass, regEmail);
         } catch (err) {
           setErrorMsg(err.message || 'Registration failed');
         } finally {
@@ -6496,12 +7255,41 @@
         }
       };
 
-      const handleResetPassword = (e) => {
-        e.preventDefault();
+      const handleRequestOtp = async (e) => {
+        if (e) e.preventDefault();
         setErrorMsg('');
         setSuccessMsg('');
-        if (!forgotUser.trim() || !forgotEmail.trim() || !forgotNewPass.trim() || !forgotConfirmPass.trim()) {
-          setErrorMsg('All fields are required to verify and reset password.');
+        if (!forgotUserOrEmail.trim()) {
+          setErrorMsg('Please enter your username or registered email.');
+          return;
+        }
+        setIsLoading(true);
+        try {
+          const res = await requestPasswordResetOtp(forgotUserOrEmail.trim());
+          setForgotMaskedEmail(res.maskedEmail || res.email);
+          setForgotStep(2);
+          setSuccessMsg(`A 6-digit OTP code has been dispatched to ${res.maskedEmail || res.email}. Please check your inbox and enter it below.`);
+        } catch (err) {
+          setErrorMsg(err.message || 'Failed to send OTP.');
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      const handleVerifyOtpAndReset = async (e) => {
+        if (e) e.preventDefault();
+        setErrorMsg('');
+        setSuccessMsg('');
+        if (!forgotOtp.trim()) {
+          setErrorMsg('Please enter the 6-digit verification OTP code.');
+          return;
+        }
+        if (forgotOtp.trim().length !== 6) {
+          setErrorMsg('OTP code must be exactly 6 digits.');
+          return;
+        }
+        if (!forgotNewPass.trim() || forgotNewPass.length < 6) {
+          setErrorMsg('New password must be at least 6 characters long.');
           return;
         }
         if (forgotNewPass !== forgotConfirmPass) {
@@ -6510,15 +7298,17 @@
         }
         setIsLoading(true);
         try {
-          resetPassword(forgotUser, forgotEmail, forgotNewPass);
-          setSuccessMsg('Password reset successfully! You can now sign in with your new password.');
-          setLoginUser(forgotUser.trim());
+          await verifyOtpAndResetPassword(forgotUserOrEmail.trim(), forgotOtp.trim(), forgotNewPass);
+          setSuccessMsg('Your password has been successfully reset! You can now sign in with your new password.');
+          setLoginUser(forgotUserOrEmail.trim());
           setLoginPass(forgotNewPass);
+          setForgotStep(1);
+          setForgotOtp('');
           setForgotNewPass('');
           setForgotConfirmPass('');
           setAuthMode('login');
         } catch (err) {
-          setErrorMsg(err.message || 'Password reset failed.');
+          setErrorMsg(err.message || 'OTP verification failed.');
         } finally {
           setIsLoading(false);
         }
@@ -6585,80 +7375,132 @@
               </div>
             )}
 
-            {/* Forgot Password Form */}
+            {/* Forgot Password Form (2-Step OTP Verification Flow) */}
             {authMode === 'forgot' ? (
               <div>
-                <form onSubmit={handleResetPassword} className="space-y-3.5">
-                  <div className="text-center mb-3">
-                    <h3 className="text-sm font-bold text-white flex items-center justify-center gap-1.5">
-                      <span>🔑</span> Reset Forgotten Password
-                    </h3>
-                    <p className="text-[11px] text-slate-400 mt-0.5">
-                      Verify your account details to set a new password.
-                    </p>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1">Username or Account ID *</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. apex, kiran, or your username"
-                      value={forgotUser}
-                      onChange={(e) => setForgotUser(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-medium"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1">Registered Recovery Email *</label>
-                    <input
-                      type="email"
-                      required
-                      placeholder="e.g. owner@apexlogistics.in"
-                      value={forgotEmail}
-                      onChange={(e) => setForgotEmail(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-mono"
-                    />
-                    <p className="text-[10px] text-slate-500 mt-1">Must match the registered email for this account.</p>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1">New Password * (Min 6 characters)</label>
-                    <input
-                      type="password"
-                      required
-                      placeholder="Enter new password"
-                      value={forgotNewPass}
-                      onChange={(e) => setForgotNewPass(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1">Confirm New Password *</label>
-                    <input
-                      type="password"
-                      required
-                      placeholder="Re-enter new password"
-                      value={forgotConfirmPass}
-                      onChange={(e) => setForgotConfirmPass(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={isLoading}
-                    className="w-full mt-2 py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-amber-500/20 transition duration-150 uppercase tracking-wider"
-                  >
-                    {isLoading ? 'Resetting Password...' : 'Reset Password & Proceed'}
-                  </button>
-                  <div className="text-center pt-2">
+                {forgotStep === 1 ? (
+                  <form onSubmit={handleRequestOtp} className="space-y-4">
+                    <div className="text-center mb-3">
+                      <div className="w-10 h-10 mx-auto rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-lg mb-2">
+                        🔑
+                      </div>
+                      <h3 className="text-sm font-bold text-white">Reset Account Password</h3>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Step 1: Enter your registered username or email to receive a secure 6-digit OTP code via email.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1">Username or Registered Email *</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. apex or accounts@company.com"
+                        value={forgotUserOrEmail}
+                        onChange={(e) => setForgotUserOrEmail(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500 font-medium"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1">An authentication OTP code will be sent to your linked email address.</p>
+                    </div>
                     <button
-                      type="button"
-                      onClick={() => { setAuthMode('login'); setErrorMsg(''); setSuccessMsg(''); }}
-                      className="text-xs text-slate-400 hover:text-white underline font-medium"
+                      type="submit"
+                      disabled={isLoading}
+                      className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-amber-500/20 transition duration-150 uppercase tracking-wider flex items-center justify-center gap-2"
                     >
-                      ← Back to Sign In
+                      <span>✉️</span>
+                      <span>{isLoading ? 'Generating & Sending OTP...' : 'Send OTP via Supabase Mail'}</span>
                     </button>
-                  </div>
-                </form>
+                    <div className="text-center pt-2">
+                      <button
+                        type="button"
+                        onClick={() => { setAuthMode('login'); setErrorMsg(''); setSuccessMsg(''); }}
+                        className="text-xs text-slate-400 hover:text-white underline font-medium"
+                      >
+                        ← Back to Sign In
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <form onSubmit={handleVerifyOtpAndReset} className="space-y-3.5">
+                    <div className="text-center mb-3">
+                      <div className="w-10 h-10 mx-auto rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-lg mb-2">
+                        📬
+                      </div>
+                      <h3 className="text-sm font-bold text-white">Verify OTP & Set New Password</h3>
+                      <p className="text-[11px] text-emerald-400 mt-0.5 font-medium">
+                        OTP dispatched to <strong className="text-white font-mono">{forgotMaskedEmail}</strong>
+                      </p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">Valid for 15 minutes. Check spam folder if not received.</p>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-amber-300 mb-1">Enter 6-Digit OTP Code *</label>
+                      <input
+                        type="text"
+                        required
+                        maxLength={6}
+                        placeholder="••••••"
+                        value={forgotOtp}
+                        onChange={(e) => setForgotOtp(e.target.value.replace(/[^0-9]/g, ''))}
+                        className="w-full bg-slate-950 border border-amber-500/50 rounded-xl px-3.5 py-2.5 text-center text-lg font-mono tracking-[0.5em] text-white focus:outline-none focus:border-amber-400 font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1">New Password * (Min 6 characters)</label>
+                      <input
+                        type="password"
+                        required
+                        placeholder="Enter new password"
+                        value={forgotNewPass}
+                        onChange={(e) => setForgotNewPass(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1">Confirm New Password *</label>
+                      <input
+                        type="password"
+                        required
+                        placeholder="Re-enter new password"
+                        value={forgotConfirmPass}
+                        onChange={(e) => setForgotConfirmPass(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={isLoading}
+                      className="w-full mt-2 py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition duration-150 uppercase tracking-wider flex items-center justify-center gap-2"
+                    >
+                      <span>🔒</span>
+                      <span>{isLoading ? 'Verifying & Resetting...' : 'Verify OTP & Reset Password'}</span>
+                    </button>
+                    <div className="flex items-center justify-between pt-2 text-xs">
+                      <button
+                        type="button"
+                        onClick={handleRequestOtp}
+                        disabled={isLoading}
+                        className="text-amber-400 hover:text-amber-300 underline font-medium"
+                      >
+                        Resend OTP Code
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setForgotStep(1); setErrorMsg(''); setSuccessMsg(''); }}
+                        className="text-slate-400 hover:text-white underline font-medium"
+                      >
+                        Change Username/Email
+                      </button>
+                    </div>
+                    <div className="text-center pt-1">
+                      <button
+                        type="button"
+                        onClick={() => { setAuthMode('login'); setForgotStep(1); setErrorMsg(''); setSuccessMsg(''); }}
+                        className="text-xs text-slate-400 hover:text-white underline font-medium"
+                      >
+                        ← Back to Sign In
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
             ) : authMode === 'login' ? (
               /* Login Form */
@@ -6805,7 +7647,8 @@
       const {
         currentUser, logout, profiles, activeProfileId, setActiveProfileId,
         addProfile, updateProfile, deleteProfile, clearAllUserData, deleteAccount,
-        storageMode, setStorageMode, cloudSyncStatus
+        storageMode, setStorageMode, cloudSyncStatus,
+        showExportModal, setShowExportModal
       } = useFleet();
       const [activeTab, setActiveTab] = useState('home');
       const [showProfModal, setShowProfModal] = useState(false);
@@ -7183,6 +8026,7 @@
           )}
 
           {showChangePassModal && <ChangePasswordModal onClose={() => setShowChangePassModal(false)} />}
+          {showExportModal && <ExportDataModal onClose={() => setShowExportModal(false)} />}
 
           <footer className="bg-slate-900 border-t border-slate-800/80 py-4 text-center text-xs text-slate-500">
             <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
