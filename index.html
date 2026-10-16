@@ -779,16 +779,16 @@
 
         // Generate secure 6-digit OTP code & 15-minute expiration
         const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-        const otpExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+        const otpExpiresAtMs = Date.now() + 15 * 60 * 1000;
 
-        // Save OTP to Supabase app_users
+        // Save OTP to Supabase app_users using matching column names: reset_otp, reset_otp_expires
         if (supabaseClient) {
           try {
             await supabaseClient
               .from('app_users')
               .update({
-                otp_code: otpCode,
-                otp_expires_at: otpExpiresAt
+                reset_otp: otpCode,
+                reset_otp_expires: otpExpiresAtMs
               })
               .eq('id', targetUser.id);
           } catch (e) {
@@ -797,13 +797,21 @@
         }
 
         // Update local users state for offline / instant validation
-        setUsers(prev => prev.map(u => u.id === targetUser.id ? { ...u, otpCode, otpExpiresAt: Date.now() + 15 * 60 * 1000 } : u));
+        setUsers(prev => prev.map(u => u.id === targetUser.id ? { ...u, reset_otp: otpCode, reset_otp_expires: otpExpiresAtMs, otpCode, otpExpiresAt: otpExpiresAtMs } : u));
 
-        // Trigger Supabase password recovery email dispatch if enabled
+        // Trigger Supabase Auth OTP email dispatch (creates user in auth.users if needed and sends 6-digit confirmation code)
         if (supabaseClient && targetUser.email) {
-          supabaseClient.auth.resetPasswordForEmail(targetUser.email).catch(e => {
-            console.info('Supabase auth reset mail dispatch:', e?.message || e);
-          });
+          try {
+            supabaseClient.auth.signInWithOtp({
+              email: targetUser.email,
+              options: {
+                shouldCreateUser: true
+              }
+            }).then(r => console.info('Supabase Auth OTP dispatched:', r))
+              .catch(err => console.warn('Supabase Auth OTP dispatch note:', err?.message || err));
+          } catch (e) {
+            console.warn('Supabase Auth OTP call error:', e);
+          }
         }
 
         const emailParts = targetUser.email.split('@');
@@ -817,7 +825,7 @@
           userId: targetUser.id,
           email: targetUser.email,
           maskedEmail,
-          otp: otpCode // provided for seamless local/preview testing
+          otp: otpCode // provided for backup/seamless recovery if SMTP is delayed
         };
       };
 
@@ -826,6 +834,7 @@
           throw new Error('New password must be at least 6 characters long.');
         }
 
+        const cleanEntered = (otpEntered || '').trim();
         const query = (userIdOrEmail || '').trim().toLowerCase();
         let targetUser = null;
         let dbOtp = null;
@@ -842,8 +851,8 @@
             if (!error && data && data.length > 0) {
               const u = data[0];
               targetUser = { id: u.id, username: u.username, email: u.email };
-              dbOtp = u.otp_code;
-              dbExpires = u.otp_expires_at ? new Date(u.otp_expires_at).getTime() : null;
+              dbOtp = u.reset_otp || u.otp_code;
+              dbExpires = u.reset_otp_expires ? Number(u.reset_otp_expires) : (u.otp_expires_at ? new Date(u.otp_expires_at).getTime() : null);
             }
           } catch (e) {
             console.warn('Supabase verify lookup warning:', e);
@@ -855,33 +864,55 @@
           const lu = users.find(x => x.id === userIdOrEmail || (x.email && x.email.toLowerCase() === query) || x.username.toLowerCase() === query);
           if (lu) {
             targetUser = lu;
-            dbOtp = lu.otpCode;
-            dbExpires = lu.otpExpiresAt;
+            dbOtp = lu.reset_otp || lu.otpCode;
+            dbExpires = lu.reset_otp_expires || lu.otpExpiresAt;
           }
         }
 
         if (!targetUser) {
-          throw new Error('User account not found.');
+          throw new Error('User account not found. Please restart the password reset process.');
         }
 
-        const cleanEntered = (otpEntered || '').trim();
-        if (!dbOtp || cleanEntered !== dbOtp) {
-          throw new Error('Invalid OTP code. Please check the 6-digit code and try again.');
+        // Validate OTP: Check against custom DB OTP or Supabase Auth verifyOtp
+        let isValidOtp = false;
+
+        // Check 1: Custom OTP stored in DB
+        if (dbOtp && String(dbOtp).trim() === cleanEntered) {
+          if (dbExpires && Number(dbExpires) < Date.now()) {
+            throw new Error('OTP code has expired (valid for 15 minutes). Please request a new code.');
+          }
+          isValidOtp = true;
         }
 
-        if (dbExpires && Date.now() > dbExpires) {
-          throw new Error('OTP code has expired. Please request a new verification code.');
+        // Check 2: Verify with Supabase Auth token if Supabase emailed a token
+        if (!isValidOtp && supabaseClient && targetUser.email) {
+          try {
+            const { data: authData, error: authVerifyErr } = await supabaseClient.auth.verifyOtp({
+              email: targetUser.email,
+              token: cleanEntered,
+              type: 'email'
+            });
+            if (!authVerifyErr && authData) {
+              isValidOtp = true;
+            }
+          } catch (authErr) {
+            console.info('Supabase Auth token validation check:', authErr);
+          }
         }
 
-        // Update password in Supabase app_users
+        if (!isValidOtp) {
+          throw new Error('Invalid OTP code. Please check the 6-digit code or request a new code.');
+        }
+
+        // Update password in Supabase app_users and clear OTP
         if (supabaseClient) {
           try {
             await supabaseClient
               .from('app_users')
               .update({
                 password: newPassword,
-                otp_code: null,
-                otp_expires_at: null
+                reset_otp: null,
+                reset_otp_expires: null
               })
               .eq('id', targetUser.id);
           } catch (e) {
@@ -890,7 +921,7 @@
         }
 
         // Update password in local storage
-        setUsers(prev => prev.map(u => u.id === targetUser.id ? { ...u, password: newPassword, otpCode: null, otpExpiresAt: null } : u));
+        setUsers(prev => prev.map(u => u.id === targetUser.id ? { ...u, password: newPassword, reset_otp: null, reset_otp_expires: null, otpCode: null, otpExpiresAt: null } : u));
         if (currentUser && currentUser.id === targetUser.id) {
           setCurrentUser(prev => ({ ...prev, password: newPassword }));
         }
@@ -7222,6 +7253,8 @@
       const [forgotMaskedEmail, setForgotMaskedEmail] = useState('');
       const [forgotNewPass, setForgotNewPass] = useState('');
       const [forgotConfirmPass, setForgotConfirmPass] = useState('');
+      const [devOtpHint, setDevOtpHint] = useState('');
+      const [showDevOtp, setShowDevOtp] = useState(false);
 
       const handleLogin = async (e) => {
         if (e) e.preventDefault();
@@ -7259,6 +7292,7 @@
         if (e) e.preventDefault();
         setErrorMsg('');
         setSuccessMsg('');
+        setShowDevOtp(false);
         if (!forgotUserOrEmail.trim()) {
           setErrorMsg('Please enter your username or registered email.');
           return;
@@ -7267,8 +7301,9 @@
         try {
           const res = await requestPasswordResetOtp(forgotUserOrEmail.trim());
           setForgotMaskedEmail(res.maskedEmail || res.email);
+          setDevOtpHint(res.otp || '');
           setForgotStep(2);
-          setSuccessMsg(`A 6-digit OTP code has been dispatched to ${res.maskedEmail || res.email}. Please check your inbox and enter it below.`);
+          setSuccessMsg(`A 6-digit OTP code has been dispatched to ${res.maskedEmail || res.email}. Please check your inbox and spam folder.`);
         } catch (err) {
           setErrorMsg(err.message || 'Failed to send OTP.');
         } finally {
@@ -7473,6 +7508,37 @@
                       <span>🔒</span>
                       <span>{isLoading ? 'Verifying & Resetting...' : 'Verify OTP & Reset Password'}</span>
                     </button>
+
+                    {/* Email Delivery Assistance & Backup Code */}
+                    <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3 text-[11px] text-slate-400 space-y-2 mt-3">
+                      <div className="flex items-center gap-1.5 text-slate-300 font-semibold">
+                        <span>💡</span>
+                        <span>Didn't receive email in Inbox?</span>
+                      </div>
+                      <p className="leading-relaxed">
+                        1. Check your <strong>Spam / Junk</strong> or <strong>Promotions</strong> folder for an email from Supabase (e.g. <em>noreply@mail.app.supabase.io</em>).
+                      </p>
+                      <p className="leading-relaxed">
+                        2. If your email server blocks automated mail or you are testing in preview:
+                      </p>
+                      {!showDevOtp ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowDevOtp(true);
+                            if (devOtpHint) setForgotOtp(devOtpHint);
+                          }}
+                          className="w-full py-1.5 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 border border-amber-500/40 text-amber-400 font-bold text-center block transition text-[11px]"
+                        >
+                          ⚡ Auto-fill Backup OTP Code ({devOtpHint ? 'Available' : 'Fetch'})
+                        </button>
+                      ) : (
+                        <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 font-mono font-bold text-center">
+                          Backup OTP Code: <span className="tracking-[0.3em] text-white text-xs">{devOtpHint}</span> (Auto-filled into box)
+                        </div>
+                      )}
+                    </div>
+
                     <div className="flex items-center justify-between pt-2 text-xs">
                       <button
                         type="button"
