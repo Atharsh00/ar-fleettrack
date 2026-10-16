@@ -118,6 +118,61 @@
       return d.toISOString().split('T')[0];
     };
 
+    // Helper to extract numeric millisecond timestamp of when a record was created
+    const getRecordTimestamp = (item) => {
+      if (!item) return 0;
+      const target = item.rawObj || item;
+
+      // 1. Check createdAt or created_at
+      const cAt = target.createdAt || target.created_at || item.createdAt || item.created_at;
+      if (cAt) {
+        const t = new Date(cAt).getTime();
+        if (!isNaN(t) && t > 0) return t;
+      }
+
+      // 2. Extract timestamp from ID (e.g. trp-1729112345678, exp-auto-1729112345678-1, etc.)
+      const idsToCheck = [target.id, item.id, item.rawId].filter(Boolean);
+      for (const idStr of idsToCheck) {
+        if (typeof idStr === 'string') {
+          const match = idStr.match(/(\d{10,13})/);
+          if (match) {
+            const t = Number(match[1]);
+            if (!isNaN(t) && t > 0) return t;
+          }
+          // For legacy sequence IDs like 'trp-5' or 'exp-3', extract trailing number
+          const seqMatch = idStr.match(/-(\d+)$/);
+          if (seqMatch) {
+            const s = Number(seqMatch[1]);
+            if (!isNaN(s) && s > 0) return s;
+          }
+        }
+      }
+
+      return 0;
+    };
+
+    // Global unified comparator: Sorts newest date first;
+    // Tie-breaker when dates are identical: last entry made reflects topmost in all tables!
+    const compareRecordsDesc = (a, b) => {
+      if (!a && !b) return 0;
+      if (!a) return 1;
+      if (!b) return -1;
+      const dateB = String(b.date || b.rawObj?.date || '').trim();
+      const dateA = String(a.date || a.rawObj?.date || '').trim();
+      const dateComp = dateB.localeCompare(dateA);
+      if (dateComp !== 0) return dateComp;
+
+      // Same date -> last made entry reflects topmost
+      const timeB = getRecordTimestamp(b);
+      const timeA = getRecordTimestamp(a);
+      if (timeB !== timeA) return timeB - timeA;
+
+      // Final fallback: compare ID string descending
+      const idB = String(b.id || b.rawObj?.id || '');
+      const idA = String(a.id || a.rawObj?.id || '');
+      return idB.localeCompare(idA);
+    };
+
     // --- INITIAL MULTI-PROFILE MOCK DATA ---
     const initialProfiles = [
       { id: 'prof-1', userId: 'usr-1', name: 'Apex Logistics India', isDefault: true, createdAt: '2026-01-01' },
@@ -1098,14 +1153,14 @@
         setSettlements(prev => prev.filter(s => s.profileId !== id));
       };
 
-      // Scoped Data
+      // Scoped Data (sorted newest date first, with last entry made topmost)
       const scopedTrucks = useMemo(() => trucks.filter(t => t.profileId === activeProfileId), [trucks, activeProfileId]);
       const scopedCompanies = useMemo(() => companies.filter(c => c.profileId === activeProfileId), [companies, activeProfileId]);
       const scopedDrivers = useMemo(() => drivers.filter(d => d.profileId === activeProfileId), [drivers, activeProfileId]);
-      const scopedTrips = useMemo(() => trips.filter(t => t.profileId === activeProfileId), [trips, activeProfileId]);
-      const scopedExpenses = useMemo(() => expenses.filter(e => e.profileId === activeProfileId), [expenses, activeProfileId]);
-      const scopedDriverPayments = useMemo(() => driverPayments.filter(p => p.profileId === activeProfileId), [driverPayments, activeProfileId]);
-      const scopedSettlements = useMemo(() => settlements.filter(s => s.profileId === activeProfileId), [settlements, activeProfileId]);
+      const scopedTrips = useMemo(() => [...trips.filter(t => t.profileId === activeProfileId)].sort(compareRecordsDesc), [trips, activeProfileId]);
+      const scopedExpenses = useMemo(() => [...expenses.filter(e => e.profileId === activeProfileId)].sort(compareRecordsDesc), [expenses, activeProfileId]);
+      const scopedDriverPayments = useMemo(() => [...driverPayments.filter(p => p.profileId === activeProfileId)].sort(compareRecordsDesc), [driverPayments, activeProfileId]);
+      const scopedSettlements = useMemo(() => [...settlements.filter(s => s.profileId === activeProfileId)].sort(compareRecordsDesc), [settlements, activeProfileId]);
 
       // Fresh state refs for background timers & workers to avoid stale closures
       const expensesRef = useRef(expenses);
@@ -1125,10 +1180,10 @@
             supabaseClient.from('trucks').select('*').eq('profile_id', targetProf),
             supabaseClient.from('companies').select('*').eq('profile_id', targetProf),
             supabaseClient.from('drivers').select('*').eq('profile_id', targetProf),
-            supabaseClient.from('trips').select('*').eq('profile_id', targetProf).order('date', { ascending: false }),
-            supabaseClient.from('expenses').select('*').eq('profile_id', targetProf).order('date', { ascending: false }),
-            supabaseClient.from('driver_payments').select('*').eq('profile_id', targetProf).order('date', { ascending: false }),
-            supabaseClient.from('settlements').select('*').eq('profile_id', targetProf).order('date', { ascending: false }),
+            supabaseClient.from('trips').select('*').eq('profile_id', targetProf).order('date', { ascending: false }).order('created_at', { ascending: false }),
+            supabaseClient.from('expenses').select('*').eq('profile_id', targetProf).order('date', { ascending: false }).order('created_at', { ascending: false }),
+            supabaseClient.from('driver_payments').select('*').eq('profile_id', targetProf).order('date', { ascending: false }).order('created_at', { ascending: false }),
+            supabaseClient.from('settlements').select('*').eq('profile_id', targetProf).order('date', { ascending: false }).order('created_at', { ascending: false }),
             supabaseClient.from('rules').select('*').eq('profile_id', targetProf),
             supabaseClient.from('email_sync_configs').select('*').eq('profile_id', targetProf)
           ]);
@@ -1449,10 +1504,10 @@
         return true;
       };
 
-      const filteredTrips = useMemo(() => scopedTrips.filter(t => isDateInRange(t.date)), [scopedTrips, dateFilter]);
-      const filteredExpenses = useMemo(() => scopedExpenses.filter(e => isDateInRange(e.date)), [scopedExpenses, dateFilter]);
-      const filteredDriverPayments = useMemo(() => scopedDriverPayments.filter(p => isDateInRange(p.date)), [scopedDriverPayments, dateFilter]);
-      const filteredSettlements = useMemo(() => scopedSettlements.filter(s => isDateInRange(s.date)), [scopedSettlements, dateFilter]);
+      const filteredTrips = useMemo(() => [...scopedTrips.filter(t => isDateInRange(t.date))].sort(compareRecordsDesc), [scopedTrips, dateFilter]);
+      const filteredExpenses = useMemo(() => [...scopedExpenses.filter(e => isDateInRange(e.date))].sort(compareRecordsDesc), [scopedExpenses, dateFilter]);
+      const filteredDriverPayments = useMemo(() => [...scopedDriverPayments.filter(p => isDateInRange(p.date))].sort(compareRecordsDesc), [scopedDriverPayments, dateFilter]);
+      const filteredSettlements = useMemo(() => [...scopedSettlements.filter(s => isDateInRange(s.date))].sort(compareRecordsDesc), [scopedSettlements, dateFilter]);
 
       // Summary Metrics
       const summaryMetrics = useMemo(() => {
@@ -1531,6 +1586,7 @@
           id: `trp-${Date.now()}`,
           profileId: activeProfileId,
           date: input.date,
+          createdAt: new Date().toISOString(),
           truckId: input.truckId,
           companyName: input.companyName.trim(),
           driverName: input.driverName.trim(),
@@ -1590,6 +1646,7 @@
           id: `exp-${Date.now()}`,
           profileId: activeProfileId,
           date: input.date,
+          createdAt: new Date().toISOString(),
           truckId: input.truckId,
           tripId: input.tripId || undefined,
           isReimbursable: Boolean(input.isReimbursable),
@@ -1624,6 +1681,7 @@
           id: `dp-${Date.now()}`,
           profileId: activeProfileId,
           date: input.date,
+          createdAt: new Date().toISOString(),
           driverName: input.driverName,
           truckId: input.truckId || undefined,
           tripId: input.tripId || undefined,
@@ -1659,6 +1717,7 @@
           id: `set-${Date.now()}`,
           profileId: activeProfileId,
           date: input.date,
+          createdAt: new Date().toISOString(),
           companyName: input.companyName,
           amount: Number(input.amount) || 0,
           paymentMethod: input.paymentMethod,
@@ -1945,6 +2004,7 @@
             id: `exp-auto-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
             profileId: activeProfileId,
             date: mailDate,
+            createdAt: new Date().toISOString(),
             truckId: targetTruckId,
             tripId: ongoingTrip ? ongoingTrip.id : null,
             isReimbursable: false,
@@ -2586,12 +2646,12 @@
 
       // Associated transactions (safely match across all scoped expenses/driver payments by tripId)
       const allExpenses = scopedExpenses || expenses || [];
-      const directExpenses = allExpenses.filter(e => e.tripId && String(e.tripId).trim() === String(trip.id).trim());
+      const directExpenses = [...allExpenses.filter(e => e.tripId && String(e.tripId).trim() === String(trip.id).trim())].sort(compareRecordsDesc);
       const opDirectExp = directExpenses.filter(e => !e.isReimbursable).reduce((s, e) => s + Number(e.amount || 0), 0);
       const reimbDirectExp = directExpenses.filter(e => e.isReimbursable).reduce((s, e) => s + Number(e.amount || 0), 0);
 
       const allPayments = scopedDriverPayments || driverPayments || [];
-      const driverClaims = allPayments.filter(p => p.tripId && String(p.tripId).trim() === String(trip.id).trim() && p.type === 'DRIVER_EXPENSE');
+      const driverClaims = [...allPayments.filter(p => p.tripId && String(p.tripId).trim() === String(trip.id).trim() && p.type === 'DRIVER_EXPENSE')].sort(compareRecordsDesc);
       const opDrvClaims = driverClaims.filter(p => !p.isReimbursable).reduce((s, p) => s + Number(p.amount || 0), 0);
       const reimbDrvClaims = driverClaims.filter(p => p.isReimbursable).reduce((s, p) => s + Number(p.amount || 0), 0);
 
@@ -2834,8 +2894,12 @@
       const fleetTotalProfit = fleetTotalRev - fleetTotalExp;
       const fleetTotalMargin = fleetTotalRev > 0 ? (fleetTotalProfit / fleetTotalRev) * 100 : 0;
 
-      // Filtered lists for itemized tables
-      const displayedTrips = selTruck === 'all' ? filteredTrips : filteredTrips.filter(t => t.truckId === selTruck);
+      // Filtered lists for itemized tables (sorted newest date first, last made entry topmost)
+      const displayedTrips = useMemo(() => {
+        const list = selTruck === 'all' ? filteredTrips : filteredTrips.filter(t => t.truckId === selTruck);
+        return [...list].sort(compareRecordsDesc);
+      }, [filteredTrips, selTruck]);
+
       // Combine direct truck expenses and driver expense claims tagged to truck
       const displayedExpenses = useMemo(() => {
         const direct = (selTruck === 'all' ? filteredExpenses : filteredExpenses.filter(e => e.truckId === selTruck)).map(e => ({
@@ -2858,7 +2922,7 @@
             itemType: 'DRIVER_CLAIM',
             rawObj: p
           }));
-        return [...direct, ...claims].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        return [...direct, ...claims].sort(compareRecordsDesc);
       }, [filteredExpenses, filteredDriverPayments, selTruck]);
 
       // Itemized Trips with Column Filters
@@ -3944,6 +4008,9 @@
         return rows.sort((a, b) => {
           const dateComp = (b.date || '').localeCompare(a.date || '');
           if (dateComp !== 0) return dateComp;
+          const timeB = getRecordTimestamp(b);
+          const timeA = getRecordTimestamp(a);
+          if (timeB !== timeA) return timeB - timeA;
           return (b.seqOrder || 0) - (a.seqOrder || 0);
         });
       }, [deepDiveCmp, filteredExpenses, filteredDriverPayments, getTruckReg, getTripBalancePending]);
@@ -3966,7 +4033,7 @@
 
       const filteredDeepTrips = useMemo(() => {
         if (!deepDiveCmp) return [];
-        return deepDiveCmp.trips.filter(t => {
+        const list = deepDiveCmp.trips.filter(t => {
           const trkReg = getTruckReg ? getTruckReg(t.truckId) : t.truckId;
           const trReimb = getTripReimbursable ? getTripReimbursable(t.id) : 0;
           const trBal = getTripBalancePending ? getTripBalancePending(t) : t.balancePending;
@@ -3982,6 +4049,7 @@
           if (deepColFilters.bal && !String(trBal).includes(deepColFilters.bal)) return false;
           return true;
         });
+        return [...list].sort(compareRecordsDesc);
       }, [deepDiveCmp, deepColFilters, getTruckReg, getTripReimbursable, getTripBalancePending]);
 
       const deepTotalContracted = filteredDeepTrips.reduce((s, t) => s + Number(t.totalRent || 0), 0);
@@ -4421,7 +4489,7 @@
             rawObj: p,
           });
         });
-        return rows.sort((a, b) => b.date.localeCompare(a.date));
+        return rows.sort(compareRecordsDesc);
       }, [deepDiveDrv]);
 
       const filteredDrvRows = useMemo(() => {
@@ -4707,7 +4775,7 @@
       const { filteredTrips, trucks, summaryMetrics, deleteTrip } = useFleet();
       const [tdsColFilters, setTdsColFilters] = useState({});
 
-      const tdsTrips = filteredTrips.filter(t => t.isTdsDeducted && Number(t.tdsAmount) > 0);
+      const tdsTrips = filteredTrips.filter(t => t.isTdsDeducted && Number(t.tdsAmount) > 0).sort(compareRecordsDesc);
       const totalGrossSubjectToTds = tdsTrips.reduce((s, t) => s + Number(t.totalRent), 0);
 
       const filteredTdsTrips = useMemo(() => {
@@ -4874,7 +4942,7 @@
             rawObj: s
           });
         });
-        return list.sort((a, b) => b.date.localeCompare(a.date));
+        return list.sort(compareRecordsDesc);
       }, [filteredTrips, filteredExpenses, filteredDriverPayments, filteredSettlements, trucks]);
 
       const filtered = unified.filter(item => {
@@ -7190,10 +7258,10 @@
         });
       };
 
-      const expTrips = useMemo(() => filterByDate(trips), [trips, filterStart, filterEnd]);
-      const expExpenses = useMemo(() => filterByDate(expenses), [expenses, filterStart, filterEnd]);
-      const expPayments = useMemo(() => filterByDate(driverPayments), [driverPayments, filterStart, filterEnd]);
-      const expSettlements = useMemo(() => filterByDate(settlements), [settlements, filterStart, filterEnd]);
+      const expTrips = useMemo(() => filterByDate(trips).sort(compareRecordsDesc), [trips, filterStart, filterEnd]);
+      const expExpenses = useMemo(() => filterByDate(expenses).sort(compareRecordsDesc), [expenses, filterStart, filterEnd]);
+      const expPayments = useMemo(() => filterByDate(driverPayments).sort(compareRecordsDesc), [driverPayments, filterStart, filterEnd]);
+      const expSettlements = useMemo(() => filterByDate(settlements).sort(compareRecordsDesc), [settlements, filterStart, filterEnd]);
 
       // RFC 4180 Escaping helper
       const escapeCSV = (val) => {
