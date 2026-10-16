@@ -1107,6 +1107,14 @@
       const scopedDriverPayments = useMemo(() => driverPayments.filter(p => p.profileId === activeProfileId), [driverPayments, activeProfileId]);
       const scopedSettlements = useMemo(() => settlements.filter(s => s.profileId === activeProfileId), [settlements, activeProfileId]);
 
+      // Fresh state refs for background timers & workers to avoid stale closures
+      const expensesRef = useRef(expenses);
+      useEffect(() => { expensesRef.current = expenses; }, [expenses]);
+      const scopedTripsRef = useRef(scopedTrips);
+      useEffect(() => { scopedTripsRef.current = scopedTrips; }, [scopedTrips]);
+      const scopedTrucksRef = useRef(scopedTrucks);
+      useEffect(() => { scopedTrucksRef.current = scopedTrucks; }, [scopedTrucks]);
+
       // --- SUPABASE CLOUD SYNC & DEMO SANDBOX ENGINES ---
       const pullCloudData = async (profId = null) => {
         if (!supabaseClient) return;
@@ -1907,18 +1915,20 @@
           const targetTruckId = matchedTruck.id;
           const targetTruckReg = matchedTruck.registrationNumber;
 
-          // Tag current ongoing trip for that truck based on date
+          // Tag current ongoing trip for that truck based on the email's actual transaction date:
+          // scopedTrips is sorted descending by date. Find the latest trip that started on or before the transaction date.
           const mailDate = mail.date || new Date().toISOString().split('T')[0];
-          const ongoingTrip = scopedTrips.find(t => {
-            return t.truckId === targetTruckId && t.date <= mailDate;
-          }) || scopedTrips.find(t => t.truckId === targetTruckId);
+          const truckTripsDesc = scopedTrips.filter(t => t.truckId === targetTruckId);
+          const ongoingTrip = truckTripsDesc.find(t => t.date <= mailDate);
 
           // Duplicate Guard: check existing ledger and newly parsed batch
           const isDuplicate = expenses.some(e =>
             (mail.id && e.sourceEmailId === mail.id) ||
+            (mail.id && e.notes && e.notes.includes(mail.id)) ||
             (e.truckId === targetTruckId && e.date === mailDate && Number(e.amount) === Number(amount) && e.category === category)
           ) || newExpensesCreated.some(e =>
             (mail.id && e.sourceEmailId === mail.id) ||
+            (mail.id && e.notes && e.notes.includes(mail.id)) ||
             (e.truckId === targetTruckId && e.date === mailDate && Number(e.amount) === Number(amount) && e.category === category)
           );
 
@@ -1936,12 +1946,12 @@
             profileId: activeProfileId,
             date: mailDate,
             truckId: targetTruckId,
-            tripId: ongoingTrip ? ongoingTrip.id : undefined,
+            tripId: ongoingTrip ? ongoingTrip.id : null,
             isReimbursable: false,
             category: category,
             amount: amount,
             paymentMethod: category === 'TOLL' ? 'FASTag (Auto-Email)' : 'Fleet Card (Auto-Email)',
-            notes: basicNote,
+            notes: mail.id ? `${basicNote} [ref:${mail.id}]` : basicNote,
             sourceEmailId: mail.id,
             isSimulation: false
           };
@@ -2026,6 +2036,10 @@
         });
 
         if (!listRes.ok) {
+          if (listRes.status === 401) {
+            localStorage.removeItem('fleet_google_token');
+            throw new Error('Google authorization session has expired. Please open Settings -> Email Expense Sync and click "Authorize This Laptop/Phone" to re-authenticate.');
+          }
           const errData = await listRes.json().catch(() => ({}));
           throw new Error(errData?.error?.message || `Gmail API error (status ${listRes.status})`);
         }
@@ -2035,13 +2049,24 @@
 
         // Track already processed IDs in localStorage to avoid duplicates
         const processedSet = new Set(JSON.parse(localStorage.getItem('fleet_processed_gmail_msg_ids') || '[]'));
-        const newMsgList = allFound.filter(m => !processedSet.has(m.id));
+
+        // Safety Reconcile: Only skip an email if it actually exists in the expenses ledger!
+        // This ensures emails that failed to insert into the cloud database during previous attempts get re-read and saved cleanly.
+        const activeExpList = expensesRef?.current || expenses || [];
+        const newMsgList = allFound.filter(m => {
+          if (!processedSet.has(m.id)) return true;
+          const existsInLedger = activeExpList.some(e =>
+            (e.sourceEmailId && e.sourceEmailId === m.id) ||
+            (e.notes && e.notes.includes(m.id))
+          );
+          return !existsInLedger;
+        });
 
         if (newMsgList.length === 0) {
           updateEmailSyncConfig({ lastSyncedAt: new Date().toISOString() });
           const explanation = allFound.length > 0
-            ? `Found ${allFound.length} matching alert email(s) in Gmail, but they were already in the processed cache. Click "Force Re-Scan (Clear Cache)" to re-parse them into the ledger!`
-            : `Scanned Gmail for query [${searchQuery}]: 0 matching emails found. Please ensure the incoming email has arrived in your inbox and contains "${tollKeyword || fuelKeyword}" in the subject line.`;
+            ? `Found ${allFound.length} matching alert email(s) in Gmail, and all have already been recorded into your ledger.`
+            : `Scanned Gmail for query [${searchQuery}]: 0 matching emails found. Please ensure the incoming alert email has arrived in your inbox.`;
           return {
             syncedCount: 0,
             hasCachedEmails: allFound.length > 0,
