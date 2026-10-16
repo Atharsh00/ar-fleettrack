@@ -793,10 +793,28 @@
         }
       };
 
+      // Automatic Cloud Data Pull: On load, profile switch, window focus, and 60s background polling
       useEffect(() => {
-        if (currentUser && !currentUser.isDemo && supabaseClient && activeProfileId) {
+        if (!currentUser || currentUser.isDemo || !supabaseClient || !activeProfileId) return;
+
+        // 1. Initial pull
+        pullCloudData(activeProfileId);
+
+        // 2. Window focus pull: Automatically refreshes when the user returns to this browser tab
+        const onFocus = () => {
           pullCloudData(activeProfileId);
-        }
+        };
+        window.addEventListener('focus', onFocus);
+
+        // 3. Periodic background sync every 60 seconds
+        const pollInterval = setInterval(() => {
+          pullCloudData(activeProfileId);
+        }, 60000);
+
+        return () => {
+          window.removeEventListener('focus', onFocus);
+          clearInterval(pollInterval);
+        };
       }, [currentUser, activeProfileId]);
 
       // Push local data into Supabase Cloud
@@ -4625,7 +4643,7 @@
         addTruck, updateTruck, deleteTruck,
         addCompany, updateCompany, deleteCompany,
         addDriver, updateDriver, deleteDriver,
-        activeRules, updateRules, activeProfile,
+        activeRules, updateRules, activeProfile, activeProfileId,
         activeEmailConfig, updateEmailSyncConfig, syncExpensesFromEmails, syncFromLiveGmail,
         clearAllUserData,
         deleteAccount,
@@ -5754,7 +5772,7 @@
                       setDbActionLoading(true);
                       setDbActionStatus(null);
                       try {
-                        await pullCloudData(activeProfileId);
+                        await pullCloudData(activeProfileId || activeProfile?.id);
                         setDbActionStatus({
                           type: 'success',
                           message: 'Successfully refreshed fresh fleet records from Supabase Cloud!'
