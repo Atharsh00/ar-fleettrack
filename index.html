@@ -553,6 +553,72 @@
       useEffect(() => { localStorage.setItem(`${STORAGE_KEY}_dp`, JSON.stringify(driverPayments)); }, [driverPayments]);
       useEffect(() => { localStorage.setItem(`${STORAGE_KEY}_settlements`, JSON.stringify(settlements)); }, [settlements]);
 
+      const [showChangePassModal, setShowChangePassModal] = useState(false);
+
+      // Listen for Supabase Magic Link / Auth Redirects & Session Recovery
+      useEffect(() => {
+        if (!supabaseClient) return;
+
+        const syncUserFromSession = async (session, isRecovery = false) => {
+          if (!session?.user?.email) return;
+          try {
+            const userEmail = session.user.email.trim().toLowerCase();
+            const { data: dbUsers, error } = await supabaseClient
+              .from('app_users')
+              .select('*')
+              .ilike('email', userEmail)
+              .limit(1);
+            if (!error && dbUsers && dbUsers.length > 0) {
+              const u = dbUsers[0];
+              const activeUser = {
+                id: u.id,
+                username: u.username,
+                email: u.email,
+                businessName: u.business_name,
+                isDemo: false
+              };
+              setCurrentUser(activeUser);
+              localStorage.setItem(`${STORAGE_KEY}_cur_user`, JSON.stringify(activeUser));
+              if (isRecovery || window.location.hash.includes('type=recovery') || window.location.search.includes('type=recovery')) {
+                setShowChangePassModal(true);
+              }
+            } else {
+              const fallbackUser = {
+                id: session.user.id || `usr-${Date.now()}`,
+                username: userEmail.split('@')[0],
+                email: userEmail,
+                businessName: 'My Fleet Business',
+                isDemo: false
+              };
+              setCurrentUser(fallbackUser);
+              localStorage.setItem(`${STORAGE_KEY}_cur_user`, JSON.stringify(fallbackUser));
+              if (isRecovery || window.location.hash.includes('type=recovery')) {
+                setShowChangePassModal(true);
+              }
+            }
+          } catch (err) {
+            console.warn('Error syncing user from Supabase session:', err);
+          }
+        };
+
+        // Check if there is an active session from the URL redirect
+        supabaseClient.auth.getSession().then(({ data: { session } }) => {
+          if (session) {
+            syncUserFromSession(session, window.location.hash.includes('type=recovery'));
+          }
+        });
+
+        const { data: { subscription } } = supabaseClient.auth.onAuthStateChange(async (event, session) => {
+          if (session && (event === 'SIGNED_IN' || event === 'PASSWORD_RECOVERY' || event === 'USER_UPDATED')) {
+            syncUserFromSession(session, event === 'PASSWORD_RECOVERY');
+          }
+        });
+
+        return () => {
+          subscription?.unsubscribe();
+        };
+      }, [supabaseClient]);
+
       // --- AUTH ACTIONS & DEMO SANDBOX ENGINE ---
       const DEMO_USER = {
         id: 'usr-demo',
@@ -2556,6 +2622,7 @@
           currentUser, users, login, signup, logout, loginDemo, resetPassword, changePassword,
           requestPasswordResetOtp, verifyOtpAndResetPassword,
           showExportModal, setShowExportModal,
+          showChangePassModal, setShowChangePassModal,
           profiles: scopedProfiles, activeProfileId, activeProfile, setActiveProfileId, addProfile, updateProfile, deleteProfile,
           activeRules, updateRules,
           activeEmailConfig, updateEmailSyncConfig, syncExpensesFromEmails, syncFromLiveGmail,
@@ -8348,7 +8415,8 @@
         addProfile, updateProfile, deleteProfile, clearAllUserData, deleteAccount,
         storageMode, setStorageMode, cloudSyncStatus,
         showExportModal, setShowExportModal,
-        googleToken, emailSyncStatus, authorizeGoogle, syncFromLiveGmail, isSyncingGmail
+        googleToken, emailSyncStatus, authorizeGoogle, syncFromLiveGmail, isSyncingGmail,
+        showChangePassModal, setShowChangePassModal
       } = useFleet();
       const [activeTab, setActiveTab] = useState('home');
       const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -8356,7 +8424,6 @@
       const [clearActionType, setClearActionType] = useState('ledgers'); // 'ledgers' | 'masters' | 'account'
       const [clearWipeMasters, setClearWipeMasters] = useState(false);
       const [clearConfirmed, setClearConfirmed] = useState(false);
-      const [showChangePassModal, setShowChangePassModal] = useState(false);
 
       // Authentication Gate: Render AuthScreen if user is not signed in
       if (!currentUser) {
