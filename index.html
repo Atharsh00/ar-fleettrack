@@ -1244,15 +1244,41 @@
       };
 
       const addProfile = (name) => {
-        const newP = { id: `prof-${Date.now()}`, userId: currentUser?.id, name: name.trim(), isDefault: false, createdAt: new Date().toISOString().split('T')[0] };
+        const newP = {
+          id: `prof-${Date.now()}`,
+          userId: currentUser?.id,
+          name: name.trim(),
+          isDefault: false,
+          createdAt: new Date().toISOString().split('T')[0]
+        };
         setProfiles(prev => [...prev, newP]);
         setRules(prev => ({ ...prev, [newP.id]: { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1 } }));
         setActiveProfileId(newP.id);
+
+        if (supabaseClient && currentUser && !currentUser.isDemo) {
+          try {
+            safeCloudExec(supabaseClient.from('profiles').upsert(toSnakeObj(newP)), 'AddProfile');
+            safeCloudExec(supabaseClient.from('rules').upsert({
+              profile_id: newP.id,
+              default_driver_salary_percent: 15,
+              default_tds_percent: 1
+            }), 'AddProfileRules');
+          } catch (e) {
+            console.warn('Supabase add profile error:', e);
+          }
+        }
         return newP;
       };
 
       const updateProfile = (id, name) => {
         setProfiles(prev => prev.map(p => p.id === id ? { ...p, name: name.trim() } : p));
+        if (supabaseClient && currentUser && !currentUser.isDemo) {
+          try {
+            safeCloudExec(supabaseClient.from('profiles').update({ name: name.trim() }).eq('id', id), 'UpdateProfile');
+          } catch (e) {
+            console.warn('Supabase update profile error:', e);
+          }
+        }
       };
 
       const deleteProfile = (id) => {
@@ -1268,6 +1294,14 @@
         setExpenses(prev => prev.filter(e => e.profileId !== id));
         setDriverPayments(prev => prev.filter(p => p.profileId !== id));
         setSettlements(prev => prev.filter(s => s.profileId !== id));
+
+        if (supabaseClient && currentUser && !currentUser.isDemo) {
+          try {
+            safeCloudExec(supabaseClient.from('profiles').delete().eq('id', id), 'DeleteProfile');
+          } catch (e) {
+            console.warn('Supabase delete profile error:', e);
+          }
+        }
       };
 
       // Scoped Data (sorted newest date first, with last entry made topmost)
@@ -1408,6 +1442,38 @@
             }));
             if (c.linked_email) {
               localStorage.setItem('fleet_google_email', c.linked_email);
+            }
+          }
+
+          // Cross-device Profile Synchronization (ensures profiles created on laptop immediately appear on phone)
+          if (currentUser && !currentUser.isDemo) {
+            try {
+              const { data: cloudProfs } = await supabaseClient
+                .from('profiles')
+                .select('*')
+                .eq('user_id', currentUser.id);
+              if (cloudProfs && cloudProfs.length > 0) {
+                const mappedProfs = cloudProfs.map(toCamelObj);
+                setProfiles(prev => {
+                  const combined = [...mappedProfs];
+                  prev.forEach(p => {
+                    if (p.userId === currentUser.id && !combined.some(cp => cp.id === p.id)) {
+                      // Profile exists locally but not in cloud yet -> backfill to Supabase!
+                      safeCloudExec(supabaseClient.from('profiles').upsert(toSnakeObj(p)), 'SyncLocalProfileToCloud');
+                      combined.push(p);
+                    }
+                  });
+                  return combined;
+                });
+              } else {
+                // If cloud has no profiles yet, backfill all local profiles for this user to cloud
+                const localUserProfs = profiles.filter(p => p.userId === currentUser.id);
+                localUserProfs.forEach(p => {
+                  safeCloudExec(supabaseClient.from('profiles').upsert(toSnakeObj(p)), 'BackfillProfileToCloud');
+                });
+              }
+            } catch (pErr) {
+              console.warn('Profile sync in pullCloudData warning:', pErr);
             }
           }
 
