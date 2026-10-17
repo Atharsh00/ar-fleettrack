@@ -559,6 +559,11 @@
       useEffect(() => {
         if (!supabaseClient) return;
 
+        const hasAuthRedirect = window.location.hash.includes('access_token') ||
+                                window.location.search.includes('code=') ||
+                                window.location.hash.includes('type=recovery') ||
+                                window.location.search.includes('type=recovery');
+
         const syncUserFromSession = async (session, isRecovery = false) => {
           if (!session?.user?.email) return;
           try {
@@ -598,18 +603,25 @@
             }
           } catch (err) {
             console.warn('Error syncing user from Supabase session:', err);
+          } finally {
+            // Clean URL address bar so refresh doesn't re-trigger tokens
+            if (window.location.hash || window.location.search) {
+              window.history.replaceState(null, '', window.location.pathname);
+            }
           }
         };
 
-        // Check if there is an active session from the URL redirect
-        supabaseClient.auth.getSession().then(({ data: { session } }) => {
-          if (session) {
-            syncUserFromSession(session, window.location.hash.includes('type=recovery'));
-          }
-        });
+        // Only auto-sync from getSession if there is an active incoming URL auth token
+        if (hasAuthRedirect) {
+          supabaseClient.auth.getSession().then(({ data: { session } }) => {
+            if (session) {
+              syncUserFromSession(session, window.location.hash.includes('type=recovery'));
+            }
+          });
+        }
 
         const { data: { subscription } } = supabaseClient.auth.onAuthStateChange(async (event, session) => {
-          if (session && (event === 'SIGNED_IN' || event === 'PASSWORD_RECOVERY' || event === 'USER_UPDATED')) {
+          if (session && (event === 'SIGNED_IN' || event === 'PASSWORD_RECOVERY')) {
             syncUserFromSession(session, event === 'PASSWORD_RECOVERY');
           }
         });
@@ -906,8 +918,26 @@
         return newUser;
       };
 
-      const logout = () => {
+      const logout = async () => {
+        try {
+          if (supabaseClient) {
+            await supabaseClient.auth.signOut();
+          }
+        } catch (e) {
+          console.warn('Supabase signOut warning:', e);
+        }
+        try {
+          localStorage.removeItem(`${STORAGE_KEY}_cur_user`);
+          Object.keys(localStorage).forEach(k => {
+            if (k.startsWith('sb-') && k.endsWith('-auth-token')) {
+              localStorage.removeItem(k);
+            }
+          });
+        } catch (e) {}
         setCurrentUser(null);
+        if (window.location.hash || window.location.search) {
+          window.history.replaceState(null, '', window.location.pathname);
+        }
       };
 
       // Password Reset with OTP & Supabase Mail Integration
