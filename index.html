@@ -6334,7 +6334,7 @@
         activeRules, updateRules,
         activeEmailConfig, updateEmailSyncConfig, syncFromLiveGmail,
         storageMode, cloudSyncStatus, lastCloudSync, pullFromCloud, pushToCloud,
-        changePassword, formatDate
+        changePassword, resetPassword, formatDate
       } = useFleet();
 
       const [activeTab, setActiveTab] = useState('profiles'); // 'profiles' | 'rules' | 'email' | 'cloud' | 'export' | 'security' | 'privacy'
@@ -6501,8 +6501,9 @@
       const [confPass, setConfPass] = useState('');
       const [passStatus, setPassStatus] = useState(null);
       const [passLoading, setPassLoading] = useState(false);
+      const [skipCurPass, setSkipCurPass] = useState(false);
 
-      const handleChangePass = (e) => {
+      const handleChangePass = async (e) => {
         e.preventDefault();
         setPassStatus(null);
         if (newPass !== confPass) {
@@ -6511,7 +6512,11 @@
         }
         setPassLoading(true);
         try {
-          changePassword(curPass, newPass);
+          if (skipCurPass) {
+            await resetPassword(currentUser.id, newPass);
+          } else {
+            await changePassword(curPass, newPass);
+          }
           setPassStatus({ type: 'success', message: 'Password successfully updated!' });
           setCurPass('');
           setNewPass('');
@@ -7128,17 +7133,39 @@
                       )}
 
                       <form onSubmit={handleChangePass} className="space-y-3 max-w-md">
-                        <div>
-                          <label className="block text-xs font-bold text-slate-300 mb-1">Current Password *</label>
-                          <input
-                            type="password"
-                            required
-                            placeholder="Enter current password"
-                            value={curPass}
-                            onChange={(e) => setCurPass(e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
-                          />
-                        </div>
+                        {!skipCurPass ? (
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-xs font-bold text-slate-300">Current Password *</label>
+                              <button
+                                type="button"
+                                onClick={() => setSkipCurPass(true)}
+                                className="text-[11px] text-amber-400 hover:text-amber-300 underline font-medium"
+                              >
+                                Forgot current password?
+                              </button>
+                            </div>
+                            <input
+                              type="password"
+                              required={!skipCurPass}
+                              placeholder="Enter current password"
+                              value={curPass}
+                              onChange={(e) => setCurPass(e.target.value)}
+                              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+                            />
+                          </div>
+                        ) : (
+                          <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between">
+                            <span>Logged-in session verified. You can set a new password directly.</span>
+                            <button
+                              type="button"
+                              onClick={() => setSkipCurPass(false)}
+                              className="text-[11px] text-slate-400 hover:text-white underline ml-2 whitespace-nowrap"
+                            >
+                              I know my old password
+                            </button>
+                          </div>
+                        )}
                         <div>
                           <label className="block text-xs font-bold text-slate-300 mb-1">New Password * (Min 6 chars)</label>
                           <input
@@ -7254,15 +7281,16 @@
 
     // --- MODAL: CHANGE ACCOUNT PASSWORD (FOR SIGNED-IN USERS) ---
     function ChangePasswordModal({ onClose }) {
-      const { currentUser, changePassword } = useFleet();
+      const { currentUser, changePassword, resetPassword } = useFleet();
       const [currentPass, setCurrentPass] = useState('');
       const [newPass, setNewPass] = useState('');
       const [confirmPass, setConfirmPass] = useState('');
       const [error, setError] = useState('');
       const [success, setSuccess] = useState('');
       const [loading, setLoading] = useState(false);
+      const [skipOldPassword, setSkipOldPassword] = useState(false);
 
-      const handleSubmit = (e) => {
+      const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
         setSuccess('');
@@ -7272,7 +7300,11 @@
         }
         setLoading(true);
         try {
-          changePassword(currentPass, newPass);
+          if (skipOldPassword) {
+            await resetPassword(currentUser.id, newPass);
+          } else {
+            await changePassword(currentPass, newPass);
+          }
           setSuccess('Your password has been updated successfully!');
           setCurrentPass('');
           setNewPass('');
@@ -7315,17 +7347,39 @@
             )}
 
             <form onSubmit={handleSubmit} className="space-y-3.5">
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">Current Password *</label>
-                <input
-                  type="password"
-                  required
-                  placeholder="Enter current password"
-                  value={currentPass}
-                  onChange={(e) => setCurrentPass(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
-                />
-              </div>
+              {!skipOldPassword ? (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-slate-300">Current Password *</label>
+                    <button
+                      type="button"
+                      onClick={() => setSkipOldPassword(true)}
+                      className="text-[11px] text-amber-400 hover:text-amber-300 underline font-medium"
+                    >
+                      Forgot current password?
+                    </button>
+                  </div>
+                  <input
+                    type="password"
+                    required={!skipOldPassword}
+                    placeholder="Enter current password"
+                    value={currentPass}
+                    onChange={(e) => setCurrentPass(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              ) : (
+                <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between">
+                  <span>Logged-in session verified. You can set a new password directly.</span>
+                  <button
+                    type="button"
+                    onClick={() => setSkipOldPassword(false)}
+                    className="text-[11px] text-slate-400 hover:text-white underline ml-2 whitespace-nowrap"
+                  >
+                    I know my old password
+                  </button>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1">New Password * (Min 6 characters)</label>
                 <input
