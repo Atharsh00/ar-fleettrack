@@ -994,13 +994,16 @@
         // Check 2: Verify with Supabase Auth token if Supabase emailed a token
         if (!isValidOtp && supabaseClient && targetUser.email) {
           try {
-            const { data: authData, error: authVerifyErr } = await supabaseClient.auth.verifyOtp({
-              email: targetUser.email,
-              token: cleanEntered,
-              type: 'email'
-            });
-            if (!authVerifyErr && authData) {
-              isValidOtp = true;
+            for (const otpType of ['email', 'magiclink', 'recovery', 'signup']) {
+              const { data: authData, error: authVerifyErr } = await supabaseClient.auth.verifyOtp({
+                email: targetUser.email,
+                token: cleanEntered,
+                type: otpType
+              });
+              if (!authVerifyErr && (authData?.user || authData?.session)) {
+                isValidOtp = true;
+                break;
+              }
             }
           } catch (authErr) {
             console.info('Supabase Auth token validation check:', authErr);
