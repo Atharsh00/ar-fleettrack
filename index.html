@@ -2725,19 +2725,47 @@
       // Associated transactions (safely match across all scoped expenses/driver payments by tripId)
       const allExpenses = scopedExpenses || expenses || [];
       const directExpenses = [...allExpenses.filter(e => e.tripId && String(e.tripId).trim() === String(trip.id).trim())].sort(compareRecordsDesc);
-      const opDirectExp = directExpenses.filter(e => !e.isReimbursable).reduce((s, e) => s + Number(e.amount || 0), 0);
-      const reimbDirectExp = directExpenses.filter(e => e.isReimbursable).reduce((s, e) => s + Number(e.amount || 0), 0);
+      const nonReimbDirectExpenses = directExpenses.filter(e => !e.isReimbursable);
+      const reimbDirectExpenses = directExpenses.filter(e => e.isReimbursable);
+      const opDirectExp = nonReimbDirectExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+      const reimbDirectExp = reimbDirectExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
 
       const allPayments = scopedDriverPayments || driverPayments || [];
       const driverClaims = [...allPayments.filter(p => p.tripId && String(p.tripId).trim() === String(trip.id).trim() && p.type === 'DRIVER_EXPENSE')].sort(compareRecordsDesc);
-      const opDrvClaims = driverClaims.filter(p => !p.isReimbursable).reduce((s, p) => s + Number(p.amount || 0), 0);
-      const reimbDrvClaims = driverClaims.filter(p => p.isReimbursable).reduce((s, p) => s + Number(p.amount || 0), 0);
+      const nonReimbDriverClaims = driverClaims.filter(p => !p.isReimbursable);
+      const reimbDriverClaims = driverClaims.filter(p => p.isReimbursable);
+      const opDrvClaims = nonReimbDriverClaims.reduce((s, p) => s + Number(p.amount || 0), 0);
+      const reimbDrvClaims = reimbDriverClaims.reduce((s, p) => s + Number(p.amount || 0), 0);
 
+      const totalNonReimbursable = opDirectExp + opDrvClaims;
       const totalReimb = reimbDirectExp + reimbDrvClaims;
       const totalOpCost = opDirectExp + opDrvClaims + drvSal + comm + tds;
       const tripProfit = rent - totalOpCost;
       const profitMargin = rent > 0 ? (tripProfit / rent) * 100 : 0;
-      const balanceDue = getTripBalancePending ? getTripBalancePending(trip) : Math.max(0, rent + totalReimb - adv - rcvd - comm - tds);
+
+      // Combined reimbursable expenses list (Vehicle Direct + Driver Claims)
+      const reimbursableList = [
+        ...reimbDirectExpenses.map(e => ({
+          id: e.id,
+          date: e.date,
+          createdAt: e.createdAt,
+          sourceType: 'Vehicle Direct',
+          spender: truckReg,
+          category: e.category || 'Expense',
+          notes: e.notes || '-',
+          amount: Number(e.amount || 0)
+        })),
+        ...reimbDriverClaims.map(p => ({
+          id: p.id,
+          date: p.date,
+          createdAt: p.createdAt,
+          sourceType: 'Driver Claim',
+          spender: p.driverName || driverName || 'Driver',
+          category: 'Driver Claim',
+          notes: p.description || '-',
+          amount: Number(p.amount || 0)
+        }))
+      ].sort(compareRecordsDesc);
 
       return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-fadeIn">
@@ -2768,16 +2796,41 @@
                   <div className="text-base font-bold text-white font-mono mt-0.5">{formatCurr(rent)}</div>
                   <span className="text-[10px] text-slate-500">Gross Contract</span>
                 </div>
-                <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3">
-                  <span className="text-[10px] uppercase font-bold text-slate-400">Advance + Received</span>
-                  <div className="text-base font-bold text-emerald-400 font-mono mt-0.5">{formatCurr(adv + rcvd)}</div>
-                  <span className="text-[10px] text-slate-500">Adv: {formatCurr(adv)} | Rcvd: {formatCurr(rcvd)}</span>
-                </div>
-                <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3">
-                  <span className="text-[10px] uppercase font-bold text-slate-400">Balance Pending</span>
-                  <div className="text-base font-bold text-amber-400 font-mono mt-0.5">{formatCurr(balanceDue)}</div>
-                  <span className="text-[10px] text-slate-500">Outstanding Due</span>
-                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = document.getElementById('modal-operating-expenses');
+                    if (el) el.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                  className="bg-slate-950/70 border border-slate-800 hover:border-rose-500/50 rounded-xl p-3 text-left transition hover:bg-slate-900 group cursor-pointer"
+                  title="Click to view non-reimbursable operating expenses"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase font-bold text-rose-400">Non-Reimbursable Exp</span>
+                    <span className="text-[10px] text-slate-500 group-hover:text-rose-300 transition">↓ View</span>
+                  </div>
+                  <div className="text-base font-bold text-rose-400 font-mono mt-0.5">{formatCurr(totalNonReimbursable)}</div>
+                  <span className="text-[10px] text-slate-500">Truck: {formatCurr(opDirectExp)} | Driver: {formatCurr(opDrvClaims)}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = document.getElementById('modal-reimbursable-expenses');
+                    if (el) el.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                  className="bg-slate-950/70 border border-slate-800 hover:border-amber-500/50 rounded-xl p-3 text-left transition hover:bg-slate-900 group cursor-pointer"
+                  title="Click to view reimbursable expenses"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase font-bold text-amber-400">Re-imbursable Exp</span>
+                    <span className="text-[10px] text-slate-500 group-hover:text-amber-300 transition">↓ View</span>
+                  </div>
+                  <div className="text-base font-bold text-amber-400 font-mono mt-0.5">{formatCurr(totalReimb)}</div>
+                  <span className="text-[10px] text-slate-500">Truck: {formatCurr(reimbDirectExp)} | Driver: {formatCurr(reimbDrvClaims)}</span>
+                </button>
+
                 <div className={`bg-slate-950/70 border border-slate-800 rounded-xl p-3 ${tripProfit >= 0 ? 'border-emerald-500/30' : 'border-rose-500/30'}`}>
                   <span className="text-[10px] uppercase font-bold text-slate-400">Net Operating Profit</span>
                   <div className={`text-base font-bold font-mono mt-0.5 ${tripProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -2802,8 +2855,8 @@
                   <span className="font-mono font-bold text-purple-400">{formatCurr(drvSal)}</span>
                 </div>
                 <div>
-                  <span className="text-[10px] text-slate-400 block">Direct Truck Fuel/Tolls:</span>
-                  <span className="font-mono font-bold text-rose-400">{formatCurr(opDirectExp)}</span>
+                  <span className="text-[10px] text-slate-400 block">Operating Costs:</span>
+                  <span className="font-mono font-bold text-rose-400">{formatCurr(totalNonReimbursable)}</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-slate-400 block">Client Reimbursables:</span>
@@ -2811,13 +2864,13 @@
                 </div>
               </div>
 
-              {/* Transaction Table 1: Direct Truck Expenses (Fuel, Tolls, Repairs) */}
-              <div className="space-y-2">
+              {/* Transaction Table 1: Direct Vehicle Expenses Tagged (Non-Reimbursable only) */}
+              <div id="modal-operating-expenses" className="space-y-2">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                    <span>⛽</span> Direct Vehicle Expenses Tagged ({directExpenses.length})
+                    <span>⛽</span> Direct Vehicle Expenses Tagged ({nonReimbDirectExpenses.length})
                   </h4>
-                  <span className="text-xs font-mono font-bold text-slate-400">Total: {formatCurr(directExpenses.reduce((s, e) => s + Number(e.amount || 0), 0))}</span>
+                  <span className="text-xs font-mono font-bold text-rose-400">Total: {formatCurr(opDirectExp)}</span>
                 </div>
                 <div className="overflow-x-auto rounded-xl border border-slate-800">
                   <table className="w-full text-left text-xs text-slate-300">
@@ -2827,29 +2880,21 @@
                         <th className="p-2">Category</th>
                         <th className="p-2">Payment Method</th>
                         <th className="p-2">Notes</th>
-                        <th className="p-2 text-center">Type</th>
                         <th className="p-2 text-right">Amount</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800">
-                      {directExpenses.length === 0 ? (
+                      {nonReimbDirectExpenses.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="p-3 text-center text-slate-500 italic">No direct truck expenses tagged to this trip.</td>
+                          <td colSpan={5} className="p-3 text-center text-slate-500 italic">No non-reimbursable direct vehicle expenses tagged to this trip.</td>
                         </tr>
                       ) : (
-                        directExpenses.map(e => (
+                        nonReimbDirectExpenses.map(e => (
                           <tr key={e.id} className="hover:bg-slate-800/30">
                             <td className="p-2 font-mono text-slate-400 whitespace-nowrap">{formatDate(e.date)}</td>
                             <td className="p-2 font-bold text-white whitespace-nowrap">{e.category}</td>
                             <td className="p-2 text-slate-400 whitespace-nowrap">{e.paymentMethod || 'Cash / Direct'}</td>
                             <td className="p-2 text-slate-300">{e.notes || '-'}</td>
-                            <td className="p-2 text-center whitespace-nowrap">
-                              {e.isReimbursable ? (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">Client Reimbursable</span>
-                              ) : (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-400">Vehicle Cost</span>
-                              )}
-                            </td>
                             <td className="p-2 text-right font-mono font-bold text-rose-400 whitespace-nowrap">{formatCurr(e.amount)}</td>
                           </tr>
                         ))
@@ -2859,13 +2904,13 @@
                 </div>
               </div>
 
-              {/* Transaction Table 2: Driver Claims & On-road Expenses */}
+              {/* Transaction Table 2: Driver Expense Claims Tagged (Non-Reimbursable only) */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                    <span>👨‍✈️</span> Driver Expense Claims Tagged ({driverClaims.length})
+                    <span>👨‍✈️</span> Driver Expense Claims Tagged ({nonReimbDriverClaims.length})
                   </h4>
-                  <span className="text-xs font-mono font-bold text-slate-400">Total: {formatCurr(driverClaims.reduce((s, p) => s + Number(p.amount || 0), 0))}</span>
+                  <span className="text-xs font-mono font-bold text-rose-400">Total: {formatCurr(opDrvClaims)}</span>
                 </div>
                 <div className="overflow-x-auto rounded-xl border border-slate-800">
                   <table className="w-full text-left text-xs text-slate-300">
@@ -2874,29 +2919,69 @@
                         <th className="p-2">Date</th>
                         <th className="p-2">Driver</th>
                         <th className="p-2">Description</th>
-                        <th className="p-2 text-center">Type</th>
                         <th className="p-2 text-right">Claim Amount</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800">
-                      {driverClaims.length === 0 ? (
+                      {nonReimbDriverClaims.length === 0 ? (
                         <tr>
-                          <td colSpan={5} className="p-3 text-center text-slate-500 italic">No driver expense claims tagged to this trip.</td>
+                          <td colSpan={4} className="p-3 text-center text-slate-500 italic">No non-reimbursable driver claims tagged to this trip.</td>
                         </tr>
                       ) : (
-                        driverClaims.map(p => (
+                        nonReimbDriverClaims.map(p => (
                           <tr key={p.id} className="hover:bg-slate-800/30">
                             <td className="p-2 font-mono text-slate-400 whitespace-nowrap">{formatDate(p.date)}</td>
                             <td className="p-2 font-bold text-white whitespace-nowrap">{p.driverName}</td>
                             <td className="p-2 text-slate-300">{p.description || '-'}</td>
-                            <td className="p-2 text-center whitespace-nowrap">
-                              {p.isReimbursable ? (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">Client Reimbursable</span>
+                            <td className="p-2 text-right font-mono font-bold text-rose-400 whitespace-nowrap">{formatCurr(p.amount)}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Transaction Table 3: Re-imbursable Expenses (Combined Vehicle Direct & Driver Claims) */}
+              <div id="modal-reimbursable-expenses" className="space-y-2 pt-2 border-t border-slate-800/80">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <span>💼</span> Re-imbursable Expenses ({reimbursableList.length})
+                  </h4>
+                  <span className="text-xs font-mono font-bold text-amber-400">Total: {formatCurr(totalReimb)}</span>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-amber-500/20 bg-amber-500/[0.02]">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-slate-800/80 text-[10px] uppercase text-slate-400">
+                      <tr>
+                        <th className="p-2">Date</th>
+                        <th className="p-2">Source</th>
+                        <th className="p-2">Category / Item</th>
+                        <th className="p-2">Spender / Vehicle</th>
+                        <th className="p-2">Notes / Description</th>
+                        <th className="p-2 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800">
+                      {reimbursableList.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-3 text-center text-slate-500 italic">No reimbursable expenses tagged to this trip.</td>
+                        </tr>
+                      ) : (
+                        reimbursableList.map(item => (
+                          <tr key={item.id} className="hover:bg-slate-800/30">
+                            <td className="p-2 font-mono text-slate-400 whitespace-nowrap">{formatDate(item.date)}</td>
+                            <td className="p-2 whitespace-nowrap">
+                              {item.sourceType === 'Vehicle Direct' ? (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">Vehicle Direct</span>
                               ) : (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-400">Driver Claim</span>
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20">Driver Claim</span>
                               )}
                             </td>
-                            <td className="p-2 text-right font-mono font-bold text-amber-400 whitespace-nowrap">{formatCurr(p.amount)}</td>
+                            <td className="p-2 font-bold text-white whitespace-nowrap">{item.category}</td>
+                            <td className="p-2 text-slate-300 whitespace-nowrap">{item.spender}</td>
+                            <td className="p-2 text-slate-300">{item.notes}</td>
+                            <td className="p-2 text-right font-mono font-bold text-amber-400 whitespace-nowrap">{formatCurr(item.amount)}</td>
                           </tr>
                         ))
                       )}
