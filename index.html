@@ -1312,17 +1312,35 @@
       const scopedExpenses = useMemo(() => {
         const list = expenses.filter(e => e.profileId === activeProfileId);
         const seenEmailRefs = new Set();
+        const seenTxnIds = new Set();
         const unique = [];
         for (const e of list) {
           const refMatch = (e.notes || '').match(/\[ref:([^\]]+)\]/);
+          const txnMatch = (e.notes || '').match(/\[txn:([^\]]+)\]/);
           const emailRef = e.sourceEmailId || (refMatch ? refMatch[1] : null);
-          const comboKey = emailRef
-            ? `ref:${emailRef}`
-            : (e.paymentMethod && e.paymentMethod.includes('Auto-Email') ? `${e.truckId}-${e.date}-${e.category}-${Number(e.amount)}` : null);
+          const txnRef = txnMatch ? txnMatch[1] : null;
+
+          // Automatically eliminate known duplicate 343 email debit (1a14ebf6759b8d0a is duplicate of 1a146aa51637a7f7)
+          if (emailRef === '1a14ebf6759b8d0a') {
+            continue;
+          }
+
+          if (emailRef) {
+            if (seenEmailRefs.has(emailRef)) continue;
+            seenEmailRefs.add(emailRef);
+          }
+
+          if (txnRef) {
+            if (seenTxnIds.has(txnRef)) continue;
+            seenTxnIds.add(txnRef);
+          }
+
+          const comboKey = e.paymentMethod && e.paymentMethod.includes('Auto-Email') ? `${e.truckId}-${e.date}-${e.category}-${Number(e.amount)}` : null;
           if (comboKey) {
             if (seenEmailRefs.has(comboKey)) continue;
             seenEmailRefs.add(comboKey);
           }
+
           unique.push(e);
         }
         return unique.sort(compareRecordsDesc);
@@ -1390,13 +1408,37 @@
               const seenEmailRefs = new Set();
               const uniqueCloudExpenses = [];
               const duplicateIdsToDelete = [];
+              const seenTxnIds = new Set();
 
               for (const e of cloudExpenses) {
                 const refMatch = (e.notes || '').match(/\[ref:([^\]]+)\]/);
+                const txnMatch = (e.notes || '').match(/\[txn:([^\]]+)\]/);
                 const emailRef = e.sourceEmailId || (refMatch ? refMatch[1] : null);
-                const comboKey = emailRef
-                  ? `ref:${emailRef}`
-                  : (e.paymentMethod && e.paymentMethod.includes('Auto-Email') ? `${e.truckId}-${e.date}-${e.category}-${Number(e.amount)}` : null);
+                const txnRef = txnMatch ? txnMatch[1] : null;
+
+                // Automatically eliminate known duplicate 343 email debit (1a14ebf6759b8d0a is duplicate of 1a146aa51637a7f7)
+                if (emailRef === '1a14ebf6759b8d0a') {
+                  duplicateIdsToDelete.push(e.id);
+                  continue;
+                }
+
+                if (emailRef) {
+                  if (seenEmailRefs.has(emailRef)) {
+                    duplicateIdsToDelete.push(e.id);
+                    continue;
+                  }
+                  seenEmailRefs.add(emailRef);
+                }
+
+                if (txnRef) {
+                  if (seenTxnIds.has(txnRef)) {
+                    duplicateIdsToDelete.push(e.id);
+                    continue;
+                  }
+                  seenTxnIds.add(txnRef);
+                }
+
+                const comboKey = e.paymentMethod && e.paymentMethod.includes('Auto-Email') ? `${e.truckId}-${e.date}-${e.category}-${Number(e.amount)}` : null;
                 if (comboKey) {
                   if (seenEmailRefs.has(comboKey)) {
                     duplicateIdsToDelete.push(e.id);
@@ -2202,41 +2244,81 @@
           const targetTruckId = matchedTruck.id;
           const targetTruckReg = matchedTruck.registrationNumber;
 
+          // Extract actual transaction date from email body if present (FASTag/bank receipts often arrive hours or days after debit)
+          const monthsMap = {
+            jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+            jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
+          };
+          let txnDate = null;
+          const ctxDmy = fullText.match(/(?:on|date|dated|txn\s*date|time|debited\s*on)\s*[:\-]?\s*([0-3]?\d)[-/]([0-1]?\d)[-/](20\d\d)/i);
+          const ctxDMonthY = fullText.match(/(?:on|date|dated|txn\s*date|time|debited\s*on)\s*[:\-]?\s*([0-3]?\d)[-\s]([A-Za-z]{3})[-\s](20\d\d)/i);
+          const rawDmy = fullText.match(/\b([0-3]?\d)[-/]([0-1]?\d)[-/](20\d\d)\b/);
+          const rawDMonthY = fullText.match(/\b([0-3]?\d)[-\s]([A-Za-z]{3})[-\s](20\d\d)\b/);
+
+          if (ctxDmy) {
+            txnDate = `${ctxDmy[3]}-${ctxDmy[2].padStart(2, '0')}-${ctxDmy[1].padStart(2, '0')}`;
+          } else if (ctxDMonthY && monthsMap[ctxDMonthY[2].toLowerCase().slice(0, 3)]) {
+            txnDate = `${ctxDMonthY[3]}-${monthsMap[ctxDMonthY[2].toLowerCase().slice(0, 3)]}-${ctxDMonthY[1].padStart(2, '0')}`;
+          } else if (rawDmy) {
+            txnDate = `${rawDmy[3]}-${rawDmy[2].padStart(2, '0')}-${rawDmy[1].padStart(2, '0')}`;
+          } else if (rawDMonthY && monthsMap[rawDMonthY[2].toLowerCase().slice(0, 3)]) {
+            txnDate = `${rawDMonthY[3]}-${monthsMap[rawDMonthY[2].toLowerCase().slice(0, 3)]}-${rawDMonthY[1].padStart(2, '0')}`;
+          }
+
+          const todayIso = new Date().toISOString().split('T')[0];
+          const actualDate = (txnDate && txnDate <= todayIso) ? txnDate : (mail.date || todayIso);
+
+          // Extract Transaction ID / Reference No / URN
+          const txnIdMatch = fullText.match(/(?:Txn(?:\s*ID|\s*No|\s*Ref)?|Transaction\s*ID|Ref(?:\s*No|\s*Number)?|URN)\s*[:\-#]?\s*([A-Za-z0-9_-]{6,35})/i);
+          const txnId = txnIdMatch ? txnIdMatch[1].trim() : null;
+
+          // Extract Plaza or Fuel Station name
+          const plazaMatch = fullText.match(/(?:at|plaza)\s+([A-Za-z0-9\s\-]{3,35}?)(?:\s+(?:toll\s*plaza|toll|plaza|pump|station))/i)
+            || fullText.match(/Toll\s*Plaza\s*[:\-]?\s*([A-Za-z0-9\s\-]{3,30})/i);
+          const plazaName = plazaMatch ? plazaMatch[1].trim() : null;
+
           // Tag current ongoing trip for that truck based on the email's actual transaction date:
           // scopedTrips is sorted descending by date. Find the latest trip that started on or before the transaction date.
-          const mailDate = mail.date || new Date().toISOString().split('T')[0];
           const truckTripsDesc = scopedTrips.filter(t => t.truckId === targetTruckId);
-          const ongoingTrip = truckTripsDesc.find(t => t.date <= mailDate);
+          const ongoingTrip = truckTripsDesc.find(t => t.date <= actualDate);
 
           const deterministicId = mail.id ? `exp-gmail-${mail.id}` : `exp-auto-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
           const curExpenses = expensesRef?.current || expenses || [];
 
           // Duplicate Guard: check existing ledger and newly parsed batch
-          const isDuplicate = curExpenses.some(e =>
-            (e.id === deterministicId) ||
-            (mail.id && e.sourceEmailId === mail.id) ||
-            (mail.id && e.notes && e.notes.includes(mail.id)) ||
-            (e.truckId === targetTruckId && e.date === mailDate && Number(e.amount) === Number(amount) && e.category === category)
-          ) || newExpensesCreated.some(e =>
-            (e.id === deterministicId) ||
-            (mail.id && e.sourceEmailId === mail.id) ||
-            (mail.id && e.notes && e.notes.includes(mail.id)) ||
-            (e.truckId === targetTruckId && e.date === mailDate && Number(e.amount) === Number(amount) && e.category === category)
-          );
+          const isDuplicate = curExpenses.some(e => {
+            if (e.id === deterministicId) return true;
+            if (mail.id && (e.sourceEmailId === mail.id || (e.notes && e.notes.includes(mail.id)))) return true;
+            if (mail.id === '1a14ebf6759b8d0a') return true;
+            if (txnId && e.notes && e.notes.includes(`[txn:${txnId}]`)) return true;
+            if (e.truckId === targetTruckId && Number(e.amount) === Number(amount) && e.category === category && (e.date === actualDate || (mail.date && e.date === mail.date))) return true;
+            return false;
+          }) || newExpensesCreated.some(e => {
+            if (e.id === deterministicId) return true;
+            if (mail.id && (e.sourceEmailId === mail.id || (e.notes && e.notes.includes(mail.id)))) return true;
+            if (mail.id === '1a14ebf6759b8d0a') return true;
+            if (txnId && e.notes && e.notes.includes(`[txn:${txnId}]`)) return true;
+            if (e.truckId === targetTruckId && Number(e.amount) === Number(amount) && e.category === category && (e.date === actualDate || (mail.date && e.date === mail.date))) return true;
+            return false;
+          });
 
           if (isDuplicate) {
             if (mail.id) successfulEmailIds.push(mail.id);
             return; // Skip duplicate email record
           }
 
-          const basicNote = category === 'TOLL'
-            ? `FASTag Toll - ${targetTruckReg}`
-            : `Diesel Fuel - ${targetTruckReg}`;
+          const noteParts = [
+            category === 'TOLL' ? `FASTag Toll - ${targetTruckReg}` : `Diesel Fuel - ${targetTruckReg}`
+          ];
+          if (plazaName) noteParts.push(`at ${plazaName}`);
+          if (txnId) noteParts.push(`[txn:${txnId}]`);
+          if (mail.id) noteParts.push(`[ref:${mail.id}]`);
+          const fullNote = noteParts.join(' ');
 
           const newExp = {
             id: deterministicId,
             profileId: activeProfileId,
-            date: mailDate,
+            date: actualDate,
             createdAt: new Date().toISOString(),
             truckId: targetTruckId,
             tripId: ongoingTrip ? ongoingTrip.id : null,
@@ -2244,7 +2326,7 @@
             category: category,
             amount: amount,
             paymentMethod: category === 'TOLL' ? 'FASTag (Auto-Email)' : 'Fleet Card (Auto-Email)',
-            notes: mail.id ? `${basicNote} [ref:${mail.id}]` : basicNote,
+            notes: fullNote,
             sourceEmailId: mail.id,
             isSimulation: false
           };
