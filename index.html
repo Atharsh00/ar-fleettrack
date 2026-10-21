@@ -2208,21 +2208,51 @@
                          subjectLower.includes('fuel') || subjectLower.includes('diesel') || bodyLower.includes('fuel');
           const category = isFuel ? 'DIESEL' : 'TOLL';
 
-          // Extract Amount (e.g., INR 650.00, Rs. 500, ₹ 500, 500/-, debited 500, or raw digits)
-          let amount = 0;
-          const fullText = `${mail.subject} ${mail.body}`;
-          
-          const p1 = fullText.match(/(?:INR|Rs\.?|₹)\s*([\d,]+(?:\.\d+)?)/i);
-          const p2 = fullText.match(/([\d,]+(?:\.\d+)?)\s*(?:INR|Rs\.?|₹|\/-)/i);
-          const p3 = fullText.match(/(?:debited|deducted|charged|spent|amount|toll|fare|payment|purchase|fee|rs)(?:\s*(?:is|of|by|with|for|:))?\s*(?:INR|Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)/i);
-          const p4 = fullText.match(/\b([1-9]\d{1,5}(?:\.\d{1,2})?)\b/);
+          // Clean HTML tags, styles, scripts and entities from email content
+          const cleanBody = (mail.body || '')
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/gi, ' ')
+            .replace(/&amp;/gi, '&')
+            .replace(/\s+/g, ' ')
+            .trim();
+          const cleanSubject = (mail.subject || '')
+            .replace(/<[^>]+>/g, ' ')
+            .trim();
+          const fullText = `${cleanSubject} ${cleanBody}`;
 
-          const amtStr = p1?.[1] || p2?.[1] || p3?.[1] || p4?.[1];
+          // Extract Amount (e.g., INR 650.00, Rs. 500, ₹ 500, 500/-, debited 500)
+          let amount = 0;
+          
+          // 1. Primary: Explicit debit / charge phrases (most reliable for FASTag and bank alerts)
+          const pDebit = fullText.match(/(?:debited|deducted|charged|spent|toll\s*(?:fee|amount|charge)|fare|purchase)(?:\s*(?:is|of|by|with|for|:))?\s*(?:INR|Rs\.?|₹)?\s*([\d,]+(?:\.\d{1,2})?)/i);
+          
+          // 2. Secondary: Explicit currency with amount (e.g. INR 650, Rs. 500, ₹500, 500/-),
+          // explicitly excluding remaining/wallet balances to avoid false positives
+          const textWithoutBalance = fullText.replace(/(?:balance|avail(?:able)?|wallet|remaining|limit)(?:\s*(?:is|of|by|with|for|:))?\s*(?:INR|Rs\.?|₹)?\s*[\d,]+(?:\.\d+)?/gi, ' ');
+          const pCurr1 = textWithoutBalance.match(/(?:INR|Rs\.?|₹)\s*([\d,]+(?:\.\d{1,2})?)/i);
+          const pCurr2 = textWithoutBalance.match(/([\d,]+(?:\.\d{1,2})?)\s*(?:INR|Rs\.?|₹|\/-)/i);
+
+          const amtStr = pDebit?.[1] || pCurr1?.[1] || pCurr2?.[1];
           if (amtStr) {
             amount = parseFloat(amtStr.replace(/,/g, '')) || 0;
           }
 
-          if (amount <= 0) return; // Skip if no amount detected
+          if (amount <= 0) return; // Skip if no valid debit amount detected
+
+          // Real-World Sanity Bounds Check:
+          // Single FASTag toll debit cannot realistically exceed ₹5,000 (standard Indian highway tolls are ₹50 - ₹1,500)
+          // Fuel purchase cannot realistically exceed ₹60,000 (typical full diesel truck tank)
+          // This prevents reference numbers, plaza IDs, or postal codes from ever becoming expense amounts
+          if (category === 'TOLL' && (amount < 5 || amount > 5000)) {
+            console.warn(`[Email Sync] Skipped TOLL debit: Amount ₹${amount} is outside realistic highway toll bounds (₹5 - ₹5,000). Email Ref: ${mail.id}`);
+            return;
+          }
+          if (category === 'DIESEL' && (amount < 100 || amount > 60000)) {
+            console.warn(`[Email Sync] Skipped DIESEL purchase: Amount ₹${amount} is outside realistic commercial fuel bounds (₹100 - ₹60,000). Email Ref: ${mail.id}`);
+            return;
+          }
 
           // Extract Truck Number by checking registered trucks
           let matchedTruck = scopedTrucks.find(trk => {
@@ -2273,8 +2303,8 @@
           const todayIso = new Date().toISOString().split('T')[0];
           const actualDate = (txnDate && txnDate <= todayIso) ? txnDate : (mail.date || todayIso);
 
-          // Extract Transaction ID / Reference No / URN
-          const txnIdMatch = fullText.match(/(?:Txn(?:\s*ID|\s*No|\s*Ref)?|Transaction\s*ID|Ref(?:\s*No|\s*Number)?|URN)\s*[:\-#]?\s*([A-Za-z0-9_-]{6,35})/i);
+          // Extract Transaction ID / Reference No / URN using word boundaries so "Reference" is not cut into "Ref" + "erence"
+          const txnIdMatch = fullText.match(/\b(?:Txn(?:\s*ID|\s*No|\s*Ref)?|Transaction\s*ID|Ref(?:\s*No|\s*Number)?|URN)\b\s*[:\-#]?\s*([A-Za-z0-9_-]{6,35})/i);
           const txnId = txnIdMatch ? txnIdMatch[1].trim() : null;
 
           // Extract Plaza or Fuel Station name
@@ -2482,18 +2512,26 @@
             const mailDate = dateStr ? new Date(dateStr).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
 
             let bodyContent = detail.snippet ? `${detail.snippet} ` : '';
+            const rawBodyData = [];
             if (detail.payload?.body?.data) {
-              bodyContent += decodeBase64Url(detail.payload.body.data);
+              rawBodyData.push(decodeBase64Url(detail.payload.body.data));
             } else if (detail.payload?.parts) {
               detail.payload.parts.forEach(part => {
-                if (part.body?.data) bodyContent += ` ${decodeBase64Url(part.body.data)}`;
+                if (part.body?.data) rawBodyData.push(decodeBase64Url(part.body.data));
                 if (part.parts) {
                   part.parts.forEach(subPart => {
-                    if (subPart.body?.data) bodyContent += ` ${decodeBase64Url(subPart.body.data)}`;
+                    if (subPart.body?.data) rawBodyData.push(decodeBase64Url(subPart.body.data));
                   });
                 }
               });
             }
+            const cleanBodyHtml = rawBodyData.join(' ')
+              .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
+              .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
+              .replace(/<[^>]+>/g, ' ')
+              .replace(/&nbsp;/gi, ' ')
+              .replace(/\s+/g, ' ');
+            bodyContent += cleanBodyHtml;
 
             fetchedEmails.push({
               id: item.id,
