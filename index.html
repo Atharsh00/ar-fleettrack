@@ -1789,8 +1789,13 @@
           const reimb = reimbExp + reimbDrv;
           return s + Math.max(0, Number(t.totalRent || 0) + reimb - Number(t.advanceReceived || 0) - Number(t.receivedAmount || 0) - Number(t.commissionAmount || 0) - Number(t.tdsAmount || 0));
         }, 0);
-        const totalSettlementsInPeriod = filteredSettlements.reduce((s, st) => s + Number(st.amount || 0), 0);
-        const totalCompanyReceivables = Math.max(0, totalPendingRentFromTrips - totalSettlementsInPeriod);
+        const companyReceivableAdj = filteredSettlements
+          .filter(st => st.paymentMethod === 'OPENING_BALANCE' && (st.notes || '').includes('[adjType:RECEIVABLE]'))
+          .reduce((s, st) => s + Number(st.amount || 0), 0);
+        const normalSettlementsAndAdvanceAdj = filteredSettlements
+          .filter(st => !(st.paymentMethod === 'OPENING_BALANCE' && (st.notes || '').includes('[adjType:RECEIVABLE]')))
+          .reduce((s, st) => s + Number(st.amount || 0), 0);
+        const totalCompanyReceivables = Math.max(0, (totalPendingRentFromTrips + companyReceivableAdj) - normalSettlementsAndAdvanceAdj);
 
         const totalDriverCommissions = filteredTrips.reduce((s, t) => s + Number(t.driverCommission || 0), 0);
         const totalExpensesClaimed = filteredDriverPayments.filter(p => p.type === 'DRIVER_EXPENSE').reduce((s, p) => s + Number(p.amount || 0), 0);
@@ -1800,8 +1805,8 @@
         // Fleet Net Profit calculation:
         // Operational truck expenses only (excluding reimbursable expenses that client pays back)
         const totalOperationalTruckExpenses = filteredExpenses.filter(e => !e.isReimbursable).reduce((s, e) => s + Number(e.amount || 0), 0);
-        // Operational driver expense claims only (excluding reimbursable driver claims that client pays back)
-        const totalOperationalDriverExpenses = filteredDriverPayments.filter(p => p.type === 'DRIVER_EXPENSE' && !p.isReimbursable).reduce((s, p) => s + Number(p.amount || 0), 0);
+        // Operational driver expense claims only (excluding reimbursable driver claims and prior opening balance adjustments)
+        const totalOperationalDriverExpenses = filteredDriverPayments.filter(p => p.type === 'DRIVER_EXPENSE' && !p.isReimbursable && p.paymentMethod !== 'OPENING_BALANCE').reduce((s, p) => s + Number(p.amount || 0), 0);
         const totalBrokerCommissions = filteredTrips.reduce((s, t) => s + Number(t.commissionAmount || 0), 0);
         const totalTdsDeducted = filteredTrips.reduce((s, t) => s + Number(t.tdsAmount || 0), 0);
         
@@ -4186,6 +4191,7 @@
         filteredDriverPayments,
         filteredSettlements,
         addSettlement,
+        updateSettlement,
         updateTrip,
         deleteTrip,
         deleteSettlement,
@@ -4205,6 +4211,66 @@
       const [editTarget, setEditTarget] = useState(null);
       const [deepColFilters, setDeepColFilters] = useState({});
       const [payColFilters, setPayColFilters] = useState({});
+
+      // Company Prior Due / Balance Adjustment Modal State
+      const [compAdjModalOpen, setCompAdjModalOpen] = useState(false);
+      const [editingCompAdj, setEditingCompAdj] = useState(null);
+      const [compAdjTargetName, setCompAdjTargetName] = useState('');
+      const [compAdjDate, setCompAdjDate] = useState(new Date().toISOString().split('T')[0]);
+      const [compAdjAmount, setCompAdjAmount] = useState('');
+      const [compAdjDirection, setCompAdjDirection] = useState('RECEIVABLE'); // 'RECEIVABLE' (+) | 'ADVANCE' (-)
+      const [compAdjNotes, setCompAdjNotes] = useState('');
+
+      const openCompAdjustmentModal = (companyName, existingRecord = null) => {
+        setCompAdjTargetName(companyName);
+        if (existingRecord) {
+          setEditingCompAdj(existingRecord);
+          setCompAdjDate(existingRecord.date || new Date().toISOString().split('T')[0]);
+          setCompAdjAmount(String(existingRecord.amount || ''));
+          const isRec = (existingRecord.notes || '').includes('[adjType:RECEIVABLE]');
+          setCompAdjDirection(isRec ? 'RECEIVABLE' : 'ADVANCE');
+          setCompAdjNotes((existingRecord.notes || '').replace(/\s*\[adjType:[^\]]+\]/g, '').trim());
+        } else {
+          setEditingCompAdj(null);
+          setCompAdjDate(new Date().toISOString().split('T')[0]);
+          setCompAdjAmount('');
+          setCompAdjDirection('RECEIVABLE');
+          setCompAdjNotes('');
+        }
+        setCompAdjModalOpen(true);
+      };
+
+      const handleSaveCompAdjustment = (e) => {
+        e.preventDefault();
+        const amt = parseFloat(compAdjAmount);
+        if (!amt || amt <= 0) return alert('Please enter a valid amount');
+        if (!compAdjTargetName) return alert('Company name is missing');
+
+        const cleanNotes = (compAdjNotes || '').replace(/\s*\[adjType:[^\]]+\]/g, '').trim();
+        const fullNotes = `${cleanNotes || (compAdjDirection === 'RECEIVABLE' ? 'Opening Prior Due' : 'Prior Advance Held')} [adjType:${compAdjDirection}]`.trim();
+
+        if (editingCompAdj) {
+          updateSettlement(editingCompAdj.id, {
+            date: compAdjDate,
+            companyName: compAdjTargetName,
+            amount: amt,
+            paymentMethod: 'OPENING_BALANCE',
+            referenceNumber: 'ADJUSTMENT',
+            notes: fullNotes
+          });
+        } else {
+          addSettlement({
+            date: compAdjDate,
+            companyName: compAdjTargetName,
+            amount: amt,
+            paymentMethod: 'OPENING_BALANCE',
+            referenceNumber: 'ADJUSTMENT',
+            notes: fullNotes
+          });
+        }
+        setCompAdjModalOpen(false);
+        setEditingCompAdj(null);
+      };
 
       // Synchronized horizontal scroll refs for Company Deep-Dive tables
       const cmpTable1Ref = useRef(null);
@@ -4238,10 +4304,30 @@
         const commTotal = cTrips.reduce((s, t) => s + Number(t.commissionAmount || 0), 0);
         const tdsTotal = cTrips.reduce((s, t) => s + Number(t.tdsAmount || 0), 0);
         const reimbTotal = cTrips.reduce((s, t) => s + (getTripReimbursable ? getTripReimbursable(t.id) : 0), 0);
-        const settled = cSettles.reduce((s, st) => s + Number(st.amount), 0);
+
+        // Separate prior due adjustments (+ receivables) from regular settlements and advance adjustments (- credits)
+        const priorDueReceivable = cSettles
+          .filter(st => st.paymentMethod === 'OPENING_BALANCE' && (st.notes || '').includes('[adjType:RECEIVABLE]'))
+          .reduce((s, st) => s + Number(st.amount || 0), 0);
+
+        const priorAdvanceAdj = cSettles
+          .filter(st => st.paymentMethod === 'OPENING_BALANCE' && !(st.notes || '').includes('[adjType:RECEIVABLE]'))
+          .reduce((s, st) => s + Number(st.amount || 0), 0);
+
+        const regularSettled = cSettles
+          .filter(st => st.paymentMethod !== 'OPENING_BALANCE')
+          .reduce((s, st) => s + Number(st.amount || 0), 0);
+
+        const settled = regularSettled + priorAdvanceAdj;
         const totalReceived = advReceived + tripReceived + settled;
-        const balanceDue = Math.max(0, contracted + reimbTotal - totalReceived - commTotal - tdsTotal);
-        return { cmp, contracted, advReceived, tripReceived, commTotal, tdsTotal, reimbTotal, settled, totalReceived, balanceDue, trips: cTrips, settlements: cSettles };
+        const netPriorAdjustment = priorDueReceivable - priorAdvanceAdj;
+        const balanceDue = Math.max(0, (contracted + reimbTotal + priorDueReceivable) - totalReceived - commTotal - tdsTotal);
+
+        return {
+          cmp, contracted, advReceived, tripReceived, commTotal, tdsTotal, reimbTotal,
+          settled, totalReceived, balanceDue, priorDueReceivable, priorAdvanceAdj, netPriorAdjustment,
+          trips: cTrips, settlements: cSettles
+        };
       });
 
       const deepDiveCmp = deepDiveCmpId ? companyLedgers.find(cl => cl.cmp.id === deepDiveCmpId) : null;
@@ -4332,18 +4418,37 @@
           });
         });
 
-        // Ledger Settlements / Receipts
+        // Ledger Settlements / Receipts & Prior Adjustments
         (deepDiveCmp.settlements || []).forEach(s => {
           const amt = Number(s.amount || 0);
           if (amt > 0) {
+            const isOpeningBal = s.paymentMethod === 'OPENING_BALANCE';
+            const isReceivable = isOpeningBal && (s.notes || '').includes('[adjType:RECEIVABLE]');
+            const isAdvanceAdj = isOpeningBal && !isReceivable;
+
+            let source = 'Account Settlement';
+            let isBill = false;
+            if (isReceivable) {
+              source = '📌 Prior Due (+)';
+              isBill = true; // adds to running due
+            } else if (isAdvanceAdj) {
+              source = '📌 Advance Adj (-)';
+            }
+
+            const cleanNotes = (s.notes || '').replace(/\s*\[adjType:[^\]]+\]/g, '').trim();
+
             rows.push({
               id: `set-${s.id}`,
               date: s.date || '-',
-              source: 'Account Settlement',
-              details: s.notes || 'Settlement Payment Received',
-              method: s.paymentMethod || 'NEFT',
-              ref: s.referenceNumber || '-',
+              source: source,
+              details: cleanNotes || (isReceivable ? 'Prior Balance Due (Receivable)' : (isAdvanceAdj ? 'Prior Advance Held (Credit)' : 'Settlement Payment Received')),
+              method: isOpeningBal ? 'Prior Balance' : (s.paymentMethod || 'NEFT'),
+              ref: s.referenceNumber || (isOpeningBal ? 'ADJUSTMENT' : '-'),
               amount: amt,
+              isOpeningBal,
+              isReceivableAdj: isReceivable,
+              isAdvanceAdj,
+              isReimbursableBill: isBill,
               rawType: 'SETTLEMENT',
               rawObj: s
             });
@@ -4534,6 +4639,14 @@
                       <span>Total Received:</span>
                       <span className="text-emerald-400 font-mono">-{formatCurr(cl.totalReceived)}</span>
                     </div>
+                    {cl.netPriorAdjustment !== 0 && (
+                      <div className="flex justify-between text-slate-400">
+                        <span>Prior Adj / Bal:</span>
+                        <span className={`font-mono font-bold ${cl.netPriorAdjustment > 0 ? 'text-amber-400' : 'text-blue-400'}`}>
+                          {cl.netPriorAdjustment > 0 ? `+${formatCurr(cl.netPriorAdjustment)}` : `-${formatCurr(Math.abs(cl.netPriorAdjustment))}`}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between text-slate-400 pt-1 border-t border-slate-800">
                       <span className="font-bold text-slate-300">Balance Due:</span>
                       <span className="font-bold font-mono text-amber-400">{formatCurr(cl.balanceDue)}</span>
@@ -4542,9 +4655,18 @@
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between gap-2">
-                  <button onClick={() => setDeepDiveCmpId(cl.cmp.id)} className="text-xs text-slate-400 hover:text-white">
-                    Deep-Dive &rarr;
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setDeepDiveCmpId(cl.cmp.id)} className="text-xs text-slate-400 hover:text-white">
+                      Deep-Dive &rarr;
+                    </button>
+                    <button
+                      onClick={() => openCompAdjustmentModal(cl.cmp.name)}
+                      className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 border border-amber-500/30 text-[11px] font-semibold transition"
+                      title="Add Prior Due or Opening Balance Adjustment"
+                    >
+                      + Adj
+                    </button>
+                  </div>
                   {cl.balanceDue > 0 && (
                     <button
                       onClick={() => { setSettleModal(cl); setSettleAmt(cl.balanceDue); }}
@@ -4676,6 +4798,14 @@
                           <span className="text-slate-400 text-[11px]">Outstanding Due:</span>
                           <span className="text-amber-400 font-bold text-sm">{formatCurr(deepDiveCmp.balanceDue)}</span>
                         </div>
+                        <button
+                          onClick={() => openCompAdjustmentModal(deepDiveCmp.cmp.name)}
+                          className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs shadow transition flex items-center gap-1.5"
+                          title="Add Prior Due or Opening Balance Adjustment"
+                        >
+                          <span>⚖️</span>
+                          <span>+ Prior Due / Adjustment</span>
+                        </button>
                         {deepDiveCmp.balanceDue > 0 && (
                           <button
                             onClick={() => { setSettleModal(deepDiveCmp); setSettleAmt(deepDiveCmp.balanceDue); }}
@@ -4728,6 +4858,7 @@
                                 <td className="p-2.5 font-mono text-slate-400 whitespace-nowrap">{formatDate(p.date)}</td>
                                 <td className="p-2.5 font-bold whitespace-nowrap">
                                   <span className={`px-2 py-0.5 rounded text-[10px] ${
+                                    p.isOpeningBal ? (p.isReceivableAdj ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-blue-500/10 text-blue-400 border border-blue-500/20') :
                                     p.isReimbursableBill ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
                                     p.source === 'Trip Advance' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
                                     p.source === 'Trip Payment Received' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
@@ -4739,15 +4870,28 @@
                                 <td className="p-2.5 text-slate-300">{p.details}</td>
                                 <td className="p-2.5 text-slate-400 whitespace-nowrap">{p.method}</td>
                                 <td className="p-2.5 font-mono text-slate-400 whitespace-nowrap">{p.ref}</td>
-                                <td className={`p-2.5 text-right font-mono font-bold whitespace-nowrap ${p.isReimbursableBill ? 'text-amber-400' : 'text-emerald-400'}`}>
-                                  {p.isReimbursableBill ? `+${formatCurr(p.amount)} (Bill)` : `+${formatCurr(p.amount)} (Rcvd)`}
+                                <td className={`p-2.5 text-right font-mono font-bold whitespace-nowrap ${
+                                  p.isOpeningBal ? (p.isReceivableAdj ? 'text-amber-400' : 'text-blue-400') :
+                                  p.isReimbursableBill ? 'text-amber-400' : 'text-emerald-400'
+                                }`}>
+                                  {p.isOpeningBal ? (p.isReceivableAdj ? `+${formatCurr(p.amount)} (Due)` : `-${formatCurr(p.amount)} (Adv)`) :
+                                   p.isReimbursableBill ? `+${formatCurr(p.amount)} (Bill)` : `+${formatCurr(p.amount)} (Rcvd)`}
                                 </td>
                                 <td className="p-2.5 text-right font-mono font-bold text-amber-400 whitespace-nowrap">
                                   {formatCurr(p.remainingDue !== undefined ? p.remainingDue : deepDiveCmp.balanceDue)}
                                 </td>
                                 <td className="p-2.5 text-center whitespace-nowrap">
                                   <div className="flex items-center justify-center gap-2">
-                                    <button onClick={() => setEditTarget({ type: p.rawType, data: p.rawObj })} className="text-amber-400 hover:underline">
+                                    <button
+                                      onClick={() => {
+                                        if (p.isOpeningBal) {
+                                          openCompAdjustmentModal(deepDiveCmp.cmp.name, p.rawObj);
+                                        } else {
+                                          setEditTarget({ type: p.rawType, data: p.rawObj });
+                                        }
+                                      }}
+                                      className="text-amber-400 hover:underline"
+                                    >
                                       Edit
                                     </button>
                                     <button onClick={() => {
@@ -4838,6 +4982,115 @@
             </div>
           )}
 
+          {/* Company Prior Due / Balance Adjustment Modal */}
+          {compAdjModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
+              <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl p-6">
+                <div className="flex justify-between items-center mb-1">
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <span>⚖️</span>
+                    <span>{editingCompAdj ? 'Edit Prior Due / Adjustment' : 'Add Prior Due / Balance Adjustment'}</span>
+                  </h3>
+                  <button onClick={() => { setCompAdjModalOpen(false); setEditingCompAdj(null); }} className="text-slate-400 hover:text-white text-lg">✕</button>
+                </div>
+                <p className="text-xs text-amber-400 mb-4">{compAdjTargetName}</p>
+                <form onSubmit={handleSaveCompAdjustment} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">Adjustment Direction *</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCompAdjDirection('RECEIVABLE')}
+                        className={`p-2.5 rounded-xl border text-left transition flex flex-col gap-1 ${
+                          compAdjDirection === 'RECEIVABLE'
+                            ? 'bg-amber-500/20 border-amber-500 text-amber-300 ring-1 ring-amber-500'
+                            : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:bg-slate-800'
+                        }`}
+                      >
+                        <span className="font-bold text-xs flex items-center gap-1.5 text-white">
+                          <span>🟢</span> Company Owes Us (+)
+                        </span>
+                        <span className="text-[10px] text-slate-400 leading-tight">
+                          Adds to company due (unpaid old freight/bill)
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setCompAdjDirection('ADVANCE')}
+                        className={`p-2.5 rounded-xl border text-left transition flex flex-col gap-1 ${
+                          compAdjDirection === 'ADVANCE'
+                            ? 'bg-blue-500/20 border-blue-500 text-blue-300 ring-1 ring-blue-500'
+                            : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:bg-slate-800'
+                        }`}
+                      >
+                        <span className="font-bold text-xs flex items-center gap-1.5 text-white">
+                          <span>🔵</span> We Owe Company (-)
+                        </span>
+                        <span className="text-[10px] text-slate-400 leading-tight">
+                          Reduces due (advance/credit note held)
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">Effective Date *</label>
+                      <input
+                        type="date"
+                        required
+                        value={compAdjDate}
+                        onChange={(e) => setCompAdjDate(e.target.value)}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">Amount (₹) *</label>
+                      <input
+                        type="number"
+                        required
+                        min="1"
+                        step="any"
+                        placeholder="e.g. 50000"
+                        value={compAdjAmount}
+                        onChange={(e) => setCompAdjAmount(e.target.value)}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Reason / Notes / Ref</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Opening balance from Excel / Old unbilled freight"
+                      value={compAdjNotes}
+                      onChange={(e) => setCompAdjNotes(e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white"
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => { setCompAdjModalOpen(false); setEditingCompAdj(null); }}
+                      className="px-4 py-2 text-xs text-slate-400 hover:text-white"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-lg shadow-md transition"
+                    >
+                      {editingCompAdj ? 'Update Adjustment' : 'Save Adjustment'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
           {editTarget && <EditRecordModal target={editTarget} onClose={() => setEditTarget(null)} />}
         </div>
       );
@@ -4845,7 +5098,7 @@
 
     // --- TAB 4: DRIVER SALARY & EXPENDITURE LEDGER ---
     function DriverLedgerTab() {
-      const { drivers, trucks, filteredTrips, filteredDriverPayments, addDriverPayment, deleteTrip, deleteDriverPayment } = useFleet();
+      const { drivers, trucks, filteredTrips, filteredDriverPayments, addDriverPayment, updateDriverPayment, deleteTrip, deleteDriverPayment } = useFleet();
       const [driverModal, setDriverModal] = useState(null);
       const [pType, setPType] = useState('SALARY_PAYOUT');
       const [pAmount, setPAmount] = useState('');
@@ -4857,6 +5110,67 @@
       const [editTarget, setEditTarget] = useState(null);
       const [drvColFilters, setDrvColFilters] = useState({});
 
+      // Driver Prior Due / Balance Adjustment Modal State
+      const [drvAdjModalOpen, setDrvAdjModalOpen] = useState(false);
+      const [editingDrvAdj, setEditingDrvAdj] = useState(null);
+      const [drvAdjTargetName, setDrvAdjTargetName] = useState('');
+      const [drvAdjDate, setDrvAdjDate] = useState(new Date().toISOString().split('T')[0]);
+      const [drvAdjAmount, setDrvAdjAmount] = useState('');
+      const [drvAdjDirection, setDrvAdjDirection] = useState('PAYABLE'); // 'PAYABLE' (+) | 'ADVANCE' (-)
+      const [drvAdjNotes, setDrvAdjNotes] = useState('');
+
+      const openDrvAdjustmentModal = (driverName, existingRecord = null) => {
+        setDrvAdjTargetName(driverName);
+        if (existingRecord) {
+          setEditingDrvAdj(existingRecord);
+          setDrvAdjDate(existingRecord.date || new Date().toISOString().split('T')[0]);
+          setDrvAdjAmount(String(existingRecord.amount || ''));
+          const isPayable = existingRecord.type === 'DRIVER_EXPENSE' || (existingRecord.description || '').includes('[adjType:PAYABLE]');
+          setDrvAdjDirection(isPayable ? 'PAYABLE' : 'ADVANCE');
+          setDrvAdjNotes((existingRecord.description || '').replace(/\s*\[adjType:[^\]]+\]/g, '').trim());
+        } else {
+          setEditingDrvAdj(null);
+          setDrvAdjDate(new Date().toISOString().split('T')[0]);
+          setDrvAdjAmount('');
+          setDrvAdjDirection('PAYABLE');
+          setDrvAdjNotes('');
+        }
+        setDrvAdjModalOpen(true);
+      };
+
+      const handleSaveDrvAdjustment = (e) => {
+        e.preventDefault();
+        const amt = parseFloat(drvAdjAmount);
+        if (!amt || amt <= 0) return alert('Please enter a valid amount');
+        if (!drvAdjTargetName) return alert('Driver name is missing');
+
+        const type = drvAdjDirection === 'PAYABLE' ? 'DRIVER_EXPENSE' : 'SALARY_PAYOUT';
+        const cleanNotes = (drvAdjNotes || '').replace(/\s*\[adjType:[^\]]+\]/g, '').trim();
+        const fullDesc = `${cleanNotes || (drvAdjDirection === 'PAYABLE' ? 'Prior Salary Due' : 'Prior Advance Loan')} [adjType:${drvAdjDirection}]`.trim();
+
+        if (editingDrvAdj) {
+          updateDriverPayment(editingDrvAdj.id, {
+            date: drvAdjDate,
+            driverName: drvAdjTargetName,
+            type: type,
+            amount: amt,
+            paymentMethod: 'OPENING_BALANCE',
+            description: fullDesc
+          });
+        } else {
+          addDriverPayment({
+            date: drvAdjDate,
+            driverName: drvAdjTargetName,
+            type: type,
+            amount: amt,
+            paymentMethod: 'OPENING_BALANCE',
+            description: fullDesc
+          });
+        }
+        setDrvAdjModalOpen(false);
+        setEditingDrvAdj(null);
+      };
+
       const driverLedgers = drivers.map(drv => {
         const dTrips = filteredTrips.filter(t => t.driverName === drv.name);
         const dPayments = filteredDriverPayments.filter(p => p.driverName === drv.name);
@@ -4864,7 +5178,16 @@
         const totalPayoutsMade = dPayments.filter(p => p.type === 'SALARY_PAYOUT').reduce((s, p) => s + Number(p.amount), 0);
         const totalDriverExpenses = dPayments.filter(p => p.type === 'DRIVER_EXPENSE').reduce((s, p) => s + Number(p.amount), 0);
         const netBalanceDue = (totalSalaryEarned + totalDriverExpenses) - totalPayoutsMade;
-        return { drv, totalSalaryEarned, totalPayoutsMade, totalDriverExpenses, netBalanceDue, trips: dTrips, payments: dPayments };
+
+        const priorSalaryDue = dPayments
+          .filter(p => p.paymentMethod === 'OPENING_BALANCE' && p.type === 'DRIVER_EXPENSE')
+          .reduce((s, p) => s + Number(p.amount), 0);
+        const priorAdvancesGiven = dPayments
+          .filter(p => p.paymentMethod === 'OPENING_BALANCE' && p.type === 'SALARY_PAYOUT')
+          .reduce((s, p) => s + Number(p.amount), 0);
+        const netPriorAdj = priorSalaryDue - priorAdvancesGiven;
+
+        return { drv, totalSalaryEarned, totalPayoutsMade, totalDriverExpenses, netBalanceDue, priorSalaryDue, priorAdvancesGiven, netPriorAdj, trips: dTrips, payments: dPayments };
       });
 
       const deepDiveDrv = deepDiveDrvId ? driverLedgers.find(dl => dl.drv.id === deepDiveDrvId) : null;
@@ -4885,16 +5208,30 @@
           });
         });
         deepDiveDrv.payments.forEach(p => {
+          const isOpeningBal = p.paymentMethod === 'OPENING_BALANCE';
+          const isPriorSalary = isOpeningBal && p.type === 'DRIVER_EXPENSE';
+          const isPriorAdvance = isOpeningBal && p.type === 'SALARY_PAYOUT';
+
           const linkedTrk = p.truckId ? trucks.find(t => t.id === p.truckId)?.registrationNumber : null;
           const trkInfo = linkedTrk ? ` • Truck: ${linkedTrk}` : '';
           const tripInfo = p.tripId ? ' (Trip Linked)' : '';
+
+          let typeLabel = p.type === 'SALARY_PAYOUT' ? 'Advance' : 'Expense Claim';
+          if (isPriorSalary) typeLabel = '📌 Prior Salary Due (+)';
+          else if (isPriorAdvance) typeLabel = '📌 Prior Advance Loan (-)';
+
+          const cleanDesc = (p.description || '').replace(/\s*\[adjType:[^\]]+\]/g, '').trim();
+
           rows.push({
             id: p.id,
             date: p.date,
-            type: p.type === 'SALARY_PAYOUT' ? 'Advance' : 'Expense Claim',
-            details: `${p.description}${trkInfo}${tripInfo} (${p.paymentMethod || 'Cash'})`,
+            type: typeLabel,
+            details: isOpeningBal ? (cleanDesc || 'Prior Balance Adjustment') : `${cleanDesc}${trkInfo}${tripInfo} (${p.paymentMethod || 'Cash'})`,
             earned: p.type === 'DRIVER_EXPENSE' ? Number(p.amount || 0) : 0,
             paidOut: p.type === 'SALARY_PAYOUT' ? Number(p.amount || 0) : 0,
+            isOpeningBal,
+            isPriorSalary,
+            isPriorAdvance,
             rawType: 'DRIVER_PAY',
             rawObj: p,
           });
@@ -4974,6 +5311,14 @@
                       <span>Payouts Made:</span>
                       <span className="text-rose-400 font-mono">{formatCurr(dl.totalPayoutsMade)}</span>
                     </div>
+                    {dl.netPriorAdj !== 0 && (
+                      <div className="flex justify-between text-slate-400">
+                        <span>Prior Adj / Bal:</span>
+                        <span className={`font-mono font-bold ${dl.netPriorAdj > 0 ? 'text-amber-400' : 'text-purple-400'}`}>
+                          {dl.netPriorAdj > 0 ? `+${formatCurr(dl.netPriorAdj)}` : `-${formatCurr(Math.abs(dl.netPriorAdj))}`}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between text-slate-400 pt-1.5 border-t border-slate-800">
                       <span className="font-bold text-slate-200">Net Due:</span>
                       <span className={`font-bold font-mono ${dl.netBalanceDue >= 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
@@ -4984,9 +5329,18 @@
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between gap-2">
-                  <button onClick={() => setDeepDiveDrvId(dl.drv.id)} className="text-xs text-slate-400 hover:text-white">
-                    Deep-Dive &rarr;
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setDeepDiveDrvId(dl.drv.id)} className="text-xs text-slate-400 hover:text-white">
+                      Deep-Dive &rarr;
+                    </button>
+                    <button
+                      onClick={() => openDrvAdjustmentModal(dl.drv.name)}
+                      className="px-2 py-0.5 rounded bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 border border-purple-500/30 text-[11px] font-semibold transition"
+                      title="Add Prior Due or Opening Balance Adjustment"
+                    >
+                      + Adj
+                    </button>
+                  </div>
                   <button
                     onClick={() => { setDriverModal(dl.drv); setPType('SALARY_PAYOUT'); }}
                     className="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-lg text-xs"
@@ -5007,7 +5361,17 @@
                     <h3 className="text-lg font-bold text-white">{deepDiveDrv.drv.name} - Driver Deep-Dive</h3>
                     <p className="text-xs text-slate-400">Phone: {deepDiveDrv.drv.phone} • License: {deepDiveDrv.drv.licenseNumber}</p>
                   </div>
-                  <button onClick={() => { setDeepDiveDrvId(null); setDrvColFilters({}); }} className="text-slate-400 hover:text-white text-lg">✕</button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => openDrvAdjustmentModal(deepDiveDrv.drv.name)}
+                      className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl text-xs shadow transition flex items-center gap-1.5"
+                      title="Add Prior Due or Opening Balance Adjustment"
+                    >
+                      <span>⚖️</span>
+                      <span>+ Prior Due / Adjustment</span>
+                    </button>
+                    <button onClick={() => { setDeepDiveDrvId(null); setDrvColFilters({}); }} className="text-slate-400 hover:text-white text-lg">✕</button>
+                  </div>
                 </div>
                 <div className="py-4 overflow-y-auto flex-1 space-y-4">
                   <table className="w-full text-left text-xs text-slate-300">
@@ -5037,7 +5401,11 @@
                       {filteredDrvRows.map(r => (
                         <tr key={`${r.rawType}-${r.id}`} className="hover:bg-slate-800/40">
                           <td className="p-2 font-mono text-slate-400 whitespace-nowrap">{formatDate(r.date)}</td>
-                          <td className={`p-2 font-bold whitespace-nowrap ${r.rawType === 'TRIP' ? 'text-purple-300' : (r.type === 'Advance' ? 'text-rose-400' : 'text-blue-300')}`}>
+                          <td className={`p-2 font-bold whitespace-nowrap ${
+                            r.isOpeningBal
+                              ? (r.isPriorSalary ? 'text-amber-400 font-extrabold' : 'text-purple-300 font-extrabold')
+                              : (r.rawType === 'TRIP' ? 'text-purple-300' : (r.type === 'Advance' ? 'text-rose-400' : 'text-blue-300'))
+                          }`}>
                             {r.type}
                           </td>
                           <td className="p-2 text-slate-300">{r.details}</td>
@@ -5049,9 +5417,18 @@
                           </td>
                           <td className="p-2 text-center whitespace-nowrap">
                             <div className="flex items-center justify-center gap-2">
-                              <button onClick={() => setEditTarget({ type: r.rawType, data: r.rawObj })} className="text-amber-400 hover:underline">
-                                Edit
-                              </button>
+                              {r.isOpeningBal ? (
+                                <button
+                                  onClick={() => openDrvAdjustmentModal(deepDiveDrv.drv.name, r.rawObj)}
+                                  className="text-amber-400 hover:underline font-semibold"
+                                >
+                                  Edit
+                                </button>
+                              ) : (
+                                <button onClick={() => setEditTarget({ type: r.rawType, data: r.rawObj })} className="text-amber-400 hover:underline">
+                                  Edit
+                                </button>
+                              )}
                               <button onClick={() => {
                                 if (confirm(`Delete ${r.type}? Driver balances will recalculate.`)) {
                                   if (r.rawType === 'TRIP') deleteTrip(r.id);
@@ -5169,6 +5546,115 @@
                   <div className="flex justify-end gap-2 pt-2">
                     <button type="button" onClick={() => setDriverModal(null)} className="px-4 py-2 text-xs text-slate-400 hover:text-white">Cancel</button>
                     <button type="submit" className="px-4 py-2 bg-purple-600 text-white font-bold text-xs rounded-lg shadow-md">Save</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Driver Prior Due / Balance Adjustment Modal */}
+          {drvAdjModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
+              <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl p-6">
+                <div className="flex justify-between items-center mb-1">
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <span>⚖️</span>
+                    <span>{editingDrvAdj ? 'Edit Driver Due / Adjustment' : 'Add Driver Due / Balance Adjustment'}</span>
+                  </h3>
+                  <button onClick={() => { setDrvAdjModalOpen(false); setEditingDrvAdj(null); }} className="text-slate-400 hover:text-white text-lg">✕</button>
+                </div>
+                <p className="text-xs text-purple-400 mb-4">{drvAdjTargetName}</p>
+                <form onSubmit={handleSaveDrvAdjustment} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">Adjustment Direction *</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDrvAdjDirection('PAYABLE')}
+                        className={`p-2.5 rounded-xl border text-left transition flex flex-col gap-1 ${
+                          drvAdjDirection === 'PAYABLE'
+                            ? 'bg-amber-500/20 border-amber-500 text-amber-300 ring-1 ring-amber-500'
+                            : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:bg-slate-800'
+                        }`}
+                      >
+                        <span className="font-bold text-xs flex items-center gap-1.5 text-white">
+                          <span>🟢</span> We Owe Driver (+)
+                        </span>
+                        <span className="text-[10px] text-slate-400 leading-tight">
+                          Adds to driver due (unpaid old salary / kharcha)
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setDrvAdjDirection('ADVANCE')}
+                        className={`p-2.5 rounded-xl border text-left transition flex flex-col gap-1 ${
+                          drvAdjDirection === 'ADVANCE'
+                            ? 'bg-purple-500/20 border-purple-500 text-purple-300 ring-1 ring-purple-500'
+                            : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:bg-slate-800'
+                        }`}
+                      >
+                        <span className="font-bold text-xs flex items-center gap-1.5 text-white">
+                          <span>🟣</span> Driver Owes Us (-)
+                        </span>
+                        <span className="text-[10px] text-slate-400 leading-tight">
+                          Reduces due (prior cash advance / loan given)
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">Effective Date *</label>
+                      <input
+                        type="date"
+                        required
+                        value={drvAdjDate}
+                        onChange={(e) => setDrvAdjDate(e.target.value)}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">Amount (₹) *</label>
+                      <input
+                        type="number"
+                        required
+                        min="1"
+                        step="any"
+                        placeholder="e.g. 15000"
+                        value={drvAdjAmount}
+                        onChange={(e) => setDrvAdjAmount(e.target.value)}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Reason / Notes / Ref</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Previous salary pending from last month"
+                      value={drvAdjNotes}
+                      onChange={(e) => setDrvAdjNotes(e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white"
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => { setDrvAdjModalOpen(false); setEditingDrvAdj(null); }}
+                      className="px-4 py-2 text-xs text-slate-400 hover:text-white"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-lg shadow-md transition"
+                    >
+                      {editingDrvAdj ? 'Update Adjustment' : 'Save Adjustment'}
+                    </button>
                   </div>
                 </form>
               </div>
@@ -5338,17 +5824,33 @@
           });
         });
         filteredDriverPayments.forEach(p => {
+          const isOpeningBal = p.paymentMethod === 'OPENING_BALANCE';
+          const isPriorSalary = isOpeningBal && p.type === 'DRIVER_EXPENSE';
+          const isPriorAdv = isOpeningBal && p.type === 'SALARY_PAYOUT';
+          let title = p.type === 'SALARY_PAYOUT' ? 'Advance Payout' : 'Expense Claim';
+          if (isPriorSalary) title = '📌 Driver Prior Due (+)';
+          else if (isPriorAdv) title = '📌 Driver Prior Advance (-)';
+
+          const cleanDesc = (p.description || '').replace(/\s*\[adjType:[^\]]+\]/g, '').trim();
           list.push({
             id: p.id, type: 'DRIVER_PAY', date: p.date, entity: p.driverName,
-            title: p.type === 'SALARY_PAYOUT' ? 'Advance Payout' : 'Expense Claim',
-            amount: p.amount, details: p.description,
+            title,
+            amount: p.amount, details: cleanDesc || (isOpeningBal ? 'Prior Balance Adjustment' : p.description),
             rawObj: p
           });
         });
         filteredSettlements.forEach(s => {
+          const isOpeningBal = s.paymentMethod === 'OPENING_BALANCE';
+          const isReceivable = isOpeningBal && (s.notes || '').includes('[adjType:RECEIVABLE]');
+          const isAdvanceAdj = isOpeningBal && !isReceivable;
+          let title = `Settlement (${s.paymentMethod})`;
+          if (isReceivable) title = '📌 Company Prior Due (+)';
+          else if (isAdvanceAdj) title = '📌 Company Advance Adj (-)';
+
+          const cleanNotes = (s.notes || '').replace(/\s*\[adjType:[^\]]+\]/g, '').trim();
           list.push({
             id: s.id, type: 'SETTLEMENT', date: s.date, entity: s.companyName,
-            title: `Settlement (${s.paymentMethod})`, amount: s.amount, details: s.referenceNumber || s.notes || '',
+            title, amount: s.amount, details: cleanNotes || (isOpeningBal ? 'Prior Balance Adjustment' : (s.referenceNumber || s.notes || '')),
             rawObj: s
           });
         });
