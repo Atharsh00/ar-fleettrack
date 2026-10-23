@@ -199,8 +199,8 @@
     ];
 
     const initialRules = {
-      'prof-1': { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1 },
-      'prof-2': { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1 },
+      'prof-1': { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1, autoDriverSalaryEnabled: true },
+      'prof-2': { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1, autoDriverSalaryEnabled: true },
     };
 
     const initialTrucks = [
@@ -653,7 +653,7 @@
         setProfiles(prev => prev.some(p => p.id === demoProfId) ? prev : [demoProf, ...prev]);
         setRules(prev => ({
           ...prev,
-          [demoProfId]: { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1 }
+          [demoProfId]: { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1, autoDriverSalaryEnabled: true }
         }));
         setEmailSyncConfigs(prev => ({
           ...prev,
@@ -885,7 +885,7 @@
         const newUser = { id: newUserId, username: username.trim(), password, businessName: businessName.trim(), email: email.trim(), isDemo: false };
 
         setProfiles(prev => [...prev, newProf]);
-        setRules(prev => ({ ...prev, [newProfId]: { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1 } }));
+        setRules(prev => ({ ...prev, [newProfId]: { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1, autoDriverSalaryEnabled: true } }));
         setEmailSyncConfigs(prev => ({ ...prev, [newProfId]: { ...defaultEmailSyncConfig, linkedEmail: email.trim() } }));
         setUsers(prev => [...prev, newUser]);
 
@@ -1234,13 +1234,20 @@
       };
 
       const activeProfile = useMemo(() => scopedProfiles.find(p => p.id === activeProfileId) || scopedProfiles[0] || { id: 'prof-1', name: currentUser?.businessName || 'Default Entity' }, [scopedProfiles, activeProfileId, currentUser]);
-      const activeRules = useMemo(() => rules[activeProfileId] || { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1 }, [rules, activeProfileId]);
+      const activeRules = useMemo(() => rules[activeProfileId] || { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1, autoDriverSalaryEnabled: true }, [rules, activeProfileId]);
 
       const updateRules = (newRules) => {
         setRules(prev => ({
           ...prev,
-          [activeProfileId]: { ...(prev[activeProfileId] || { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1 }), ...newRules }
+          [activeProfileId]: { ...(prev[activeProfileId] || { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1, autoDriverSalaryEnabled: true }), ...newRules }
         }));
+        if (storageMode === 'cloud' && supabaseClient && currentUser && !currentUser.isDemo) {
+          safeCloudExec(supabaseClient.from('rules').upsert({
+            profile_id: activeProfileId,
+            default_driver_salary_percent: newRules.defaultDriverSalaryPercent !== undefined ? newRules.defaultDriverSalaryPercent : (rules[activeProfileId]?.defaultDriverSalaryPercent || 15),
+            default_tds_percent: newRules.defaultTdsPercent !== undefined ? newRules.defaultTdsPercent : (rules[activeProfileId]?.defaultTdsPercent || 1)
+          }), 'UpdateRules');
+        }
       };
 
       const addProfile = (name) => {
@@ -1252,7 +1259,7 @@
           createdAt: new Date().toISOString().split('T')[0]
         };
         setProfiles(prev => [...prev, newP]);
-        setRules(prev => ({ ...prev, [newP.id]: { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1 } }));
+        setRules(prev => ({ ...prev, [newP.id]: { defaultDriverSalaryPercent: 15, defaultTdsPercent: 1, autoDriverSalaryEnabled: true } }));
         setActiveProfileId(newP.id);
 
         if (supabaseClient && currentUser && !currentUser.isDemo) {
@@ -1463,6 +1470,8 @@
               setRules(prev => ({
                 ...prev,
                 [targetProf]: {
+                  autoDriverSalaryEnabled: true,
+                  ...(prev[targetProf] || {}),
                   defaultDriverSalaryPercent: Number(r.default_driver_salary_percent) || 15,
                   defaultTdsPercent: Number(r.default_tds_percent) || 1
                 }
@@ -1827,14 +1836,22 @@
       }, [filteredTrips, filteredExpenses, filteredDriverPayments, filteredSettlements, scopedExpenses]);
 
       // Recomputation Helper
-      const computeTripFields = (gross, comm, isTds, adv, received = 0) => {
+      const computeTripFields = (gross, comm, isTds, adv, received = 0, customDriverSalary = undefined) => {
         const g = Number(gross) || 0;
         const c = Number(comm) || 0;
         const a = Number(adv) || 0;
         const r = Number(received) || 0;
         const tdsAmount = isTds ? (g * (activeRules.defaultTdsPercent / 100)) : 0;
         const netRent = Math.max(0, g - tdsAmount - c);
-        const driverCommission = netRent * (activeRules.defaultDriverSalaryPercent / 100);
+        const isAuto = activeRules?.autoDriverSalaryEnabled !== false;
+        let driverCommission = 0;
+        if (customDriverSalary !== undefined && customDriverSalary !== null) {
+          driverCommission = Number(customDriverSalary) || 0;
+        } else if (!isAuto) {
+          driverCommission = 0;
+        } else {
+          driverCommission = netRent * (activeRules.defaultDriverSalaryPercent / 100);
+        }
         // Receivables Formula: Balance Due = Total Rent - Advance Received - Amount Received from Company - Commission - TDS
         const balancePending = Math.max(0, g - a - r - c - tdsAmount);
         return { tdsAmount, netRent, driverCommission, balancePending };
@@ -1843,8 +1860,9 @@
       // Trip Actions
       const addTrip = (input) => {
         const recAmt = Number(input.receivedAmount || 0);
+        const salInput = input.driverCommission !== undefined ? input.driverCommission : input.manualDriverSalary;
         const { tdsAmount, netRent, driverCommission, balancePending } = computeTripFields(
-          input.totalRent, input.commissionAmount, input.isTdsDeducted, input.advanceReceived, recAmt
+          input.totalRent, input.commissionAmount, input.isTdsDeducted, input.advanceReceived, recAmt, salInput
         );
 
         if (!scopedCompanies.some(c => c.name.toLowerCase() === input.companyName.trim().toLowerCase())) {
@@ -1895,8 +1913,9 @@
           if (t.id !== id) return t;
           const merged = { ...t, ...updates };
           const recAmt = Number(merged.receivedAmount || 0);
+          const salInput = updates.driverCommission !== undefined ? updates.driverCommission : (activeRules?.autoDriverSalaryEnabled !== false ? undefined : merged.driverCommission);
           const { tdsAmount, netRent, driverCommission, balancePending } = computeTripFields(
-            merged.totalRent, merged.commissionAmount, merged.isTdsDeducted, merged.advanceReceived, recAmt
+            merged.totalRent, merged.commissionAmount, merged.isTdsDeducted, merged.advanceReceived, recAmt, salInput
           );
           const drops = (merged.additionalDrops || []).filter(Boolean);
           const route = [merged.fromLocation, ...drops, merged.toLocation].filter(Boolean).join(' -> ');
@@ -3783,9 +3802,11 @@
       const [isTds, setIsTds] = useState(target.data.isTdsDeducted ?? true);
       const [adv, setAdv] = useState(target.data.advanceReceived?.toString() || '0');
       const [rec, setRec] = useState(target.data.receivedAmount?.toString() || '0');
+      const [editDriverSalary, setEditDriverSalary] = useState(target.data.driverCommission?.toString() || '0');
       const [tripNotes, setTripNotes] = useState(target.data.notes || '');
 
       // Dynamic calculation helper for live Trip preview
+      const isAutoSalary = activeRules?.autoDriverSalaryEnabled !== false;
       const modalGross = parseFloat(totalRent) || 0;
       const modalComm = parseFloat(comm) || 0;
       const modalAdv = parseFloat(adv) || 0;
@@ -3794,7 +3815,7 @@
       const modalDrvRate = (activeRules && activeRules.defaultDriverSalaryPercent) ? activeRules.defaultDriverSalaryPercent : 15;
       const modalTdsAmt = isTds ? (modalGross * (modalTdsRate / 100)) : 0;
       const modalNetRent = Math.max(0, modalGross - modalTdsAmt - modalComm);
-      const modalDriverSalary = modalNetRent * (modalDrvRate / 100);
+      const modalDriverSalary = isAutoSalary ? (modalNetRent * (modalDrvRate / 100)) : (parseFloat(editDriverSalary) || 0);
       const modalBalDue = Math.max(0, modalGross - modalAdv - modalRec - modalComm - modalTdsAmt);
 
       // EXPENSE STATE
@@ -3977,6 +3998,29 @@
                     </label>
                   </div>
 
+                  {!isAutoSalary && (
+                    <div className="bg-purple-950/30 border border-purple-800/60 rounded-xl p-3 space-y-1">
+                      <div className="flex justify-between items-center">
+                        <label className="block text-xs font-bold text-purple-300">
+                          ✍️ Driver Salary / Commission (₹) *
+                        </label>
+                        <span className="text-[10px] text-purple-300 bg-purple-900/60 border border-purple-700/50 px-2 py-0.5 rounded font-semibold">
+                          Manual Mode Active
+                        </span>
+                      </div>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        required
+                        value={editDriverSalary}
+                        onChange={(e) => setEditDriverSalary(e.target.value)}
+                        className="w-full bg-slate-800 border border-purple-500/50 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono font-bold"
+                        placeholder="Enter driver salary"
+                      />
+                    </div>
+                  )}
+
                   {/* Live Calculations Preview */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 bg-slate-950/70 border border-slate-800 rounded-xl p-3">
                     <div className="bg-blue-500/10 border border-blue-500/20 p-2 rounded-lg">
@@ -3984,7 +4028,9 @@
                       <div className="text-xs font-bold font-mono text-blue-400 mt-0.5">{formatCurr(modalNetRent)}</div>
                     </div>
                     <div className="bg-purple-500/10 border border-purple-500/20 p-2 rounded-lg">
-                      <span className="text-[10px] uppercase font-bold text-purple-300 block">Driver {modalDrvRate}%</span>
+                      <span className="text-[10px] uppercase font-bold text-purple-300 block">
+                        {isAutoSalary ? `Driver ${modalDrvRate}%` : 'Driver Salary (Manual)'}
+                      </span>
                       <div className="text-xs font-bold font-mono text-purple-300 mt-0.5">{formatCurr(modalDriverSalary)}</div>
                     </div>
                     <div className="bg-amber-500/10 border border-amber-500/20 p-2 rounded-lg">
@@ -5237,7 +5283,7 @@
           rows.push({
             id: t.id,
             date: t.date,
-            type: '15% Trip Salary',
+            type: 'Trip Salary',
             details: `${t.route} (Net: ${formatCurr(t.netRent)})`,
             earned: Number(t.driverCommission || 0),
             paidOut: 0,
@@ -5320,7 +5366,7 @@
           <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-lg flex justify-between items-center">
             <div>
               <h2 className="text-lg font-bold text-white">Driver Salary & Expenditure Ledger</h2>
-              <p className="text-xs text-slate-400">15% salary on Net Rent, advances tracking, and roadside claims</p>
+              <p className="text-xs text-slate-400">Driver salary earnings, advances tracking, and roadside claims</p>
             </div>
           </div>
 
@@ -5338,7 +5384,7 @@
 
                   <div className="space-y-1 text-xs">
                     <div className="flex justify-between text-slate-400">
-                      <span>15% Net Salary:</span>
+                      <span>Trip Salary:</span>
                       <span className="text-purple-300 font-mono font-bold">{formatCurr(dl.totalSalaryEarned)}</span>
                     </div>
                     <div className="flex justify-between text-slate-400">
@@ -5848,7 +5894,7 @@
           list.push({
             id: t.id, type: 'TRIP', date: t.date, entity: t.companyName,
             title: `Trip: ${t.route}`, amount: t.totalRent,
-            details: `Net: ${formatCurr(t.netRent)} | 15% Comm: ${formatCurr(t.driverCommission)} | Due: ${formatCurr(t.balancePending)}`,
+            details: `Net: ${formatCurr(t.netRent)} | Salary: ${formatCurr(t.driverCommission)} | Due: ${formatCurr(t.balancePending)}`,
             rawObj: t
           });
         });
@@ -6036,6 +6082,7 @@
       const notify = (m) => { setMsg(m); setTimeout(() => setMsg(null), 4000); };
 
       // Trip Form
+      const isAutoSalary = activeRules?.autoDriverSalaryEnabled !== false;
       const [tDate, setTDate] = useState(new Date().toISOString().split('T')[0]);
       const [tTruck, setTTruck] = useState(trucks[0]?.id || '');
       const [tComp, setTComp] = useState(companies[0]?.name || '');
@@ -6047,6 +6094,7 @@
       const [tComm, setTComm] = useState('0');
       const [isTds, setIsTds] = useState(true);
       const [tAdv, setTAdv] = useState('');
+      const [tManualSalary, setTManualSalary] = useState('');
       const [tNotes, setTNotes] = useState('');
 
       const handleAddDrop = () => setDrops([...drops, '']);
@@ -6056,11 +6104,12 @@
       const grossNum = parseFloat(tRent) || 0;
       const commNum = parseFloat(tComm) || 0;
       const advNum = parseFloat(tAdv) || 0;
+      const manualSalNum = parseFloat(tManualSalary) || 0;
       const defaultTdsRate = (activeRules && activeRules.defaultTdsPercent !== undefined) ? activeRules.defaultTdsPercent : 1;
       const defaultDrvRate = (activeRules && activeRules.defaultDriverSalaryPercent !== undefined) ? activeRules.defaultDriverSalaryPercent : 15;
       const tdsAmt = isTds ? (grossNum * (defaultTdsRate / 100)) : 0;
       const netRent = Math.max(0, grossNum - tdsAmt - commNum);
-      const driver15 = netRent * (defaultDrvRate / 100);
+      const driverSalary = isAutoSalary ? (netRent * (defaultDrvRate / 100)) : manualSalNum;
       const balancePending = Math.max(0, grossNum - advNum - commNum - tdsAmt);
 
       const handleTripSubmit = (e) => {
@@ -6069,15 +6118,20 @@
         if (!tComp) return alert('Please select a client company from Master');
         if (!tDriver) return alert('Please select a driver from Master');
         if (!fromLoc.trim() || !toLoc.trim()) return alert('From and To locations are required');
+        if (!isAutoSalary && (isNaN(manualSalNum) || manualSalNum < 0 || tManualSalary.trim() === '')) {
+          return alert('Please enter Driver Salary for this trip (Manual Entry Mode is active)');
+        }
 
         addTrip({
           date: tDate, truckId: tTruck, companyName: tComp, driverName: tDriver,
           fromLocation: fromLoc, toLocation: toLoc, additionalDrops: drops.filter(Boolean),
-          totalRent: grossNum, commissionAmount: commNum, isTdsDeducted: isTds, advanceReceived: advNum, receivedAmount: 0, notes: tNotes
+          totalRent: grossNum, commissionAmount: commNum, isTdsDeducted: isTds, advanceReceived: advNum, receivedAmount: 0,
+          manualDriverSalary: !isAutoSalary ? manualSalNum : undefined,
+          notes: tNotes
         });
 
-        notify(`Trip saved! Net Rent: ${formatCurr(netRent)}, 15% Driver Salary: ${formatCurr(driver15)}, Company Balance Due: ${formatCurr(balancePending)}`);
-        setTRent(''); setTComm('0'); setTAdv(''); setFromLoc(''); setToLoc(''); setDrops([]); setTNotes('');
+        notify(`Trip saved! Net Rent: ${formatCurr(netRent)}, Driver Salary: ${formatCurr(driverSalary)}, Company Balance Due: ${formatCurr(balancePending)}`);
+        setTRent(''); setTComm('0'); setTAdv(''); setTManualSalary(''); setFromLoc(''); setToLoc(''); setDrops([]); setTNotes('');
       };
 
       // Expense
@@ -6249,6 +6303,32 @@
                 </div>
               </div>
 
+              {!isAutoSalary && (
+                <div className="bg-purple-950/30 border border-purple-800/60 rounded-xl p-3.5 space-y-1.5 animate-fadeIn">
+                  <div className="flex justify-between items-center">
+                    <label className="block text-xs font-bold text-purple-300">
+                      ✍️ Driver Salary / Trip Commission (₹) *
+                    </label>
+                    <span className="text-[10px] text-purple-300 bg-purple-900/60 border border-purple-700/50 px-2 py-0.5 rounded font-semibold">
+                      Manual Entry Mode Active
+                    </span>
+                  </div>
+                  <input
+                    type="number"
+                    required
+                    min="0"
+                    step="any"
+                    placeholder="Enter driver trip salary (e.g. 6000)"
+                    value={tManualSalary}
+                    onChange={(e) => setTManualSalary(e.target.value)}
+                    className="w-full bg-slate-800 border border-purple-500/50 rounded-lg px-3 py-2 text-sm text-white font-mono font-bold focus:border-purple-400"
+                  />
+                  <p className="text-[11px] text-slate-400">
+                    Auto-percentage calculation is turned OFF in Settings. Enter the exact driver salary/commission for this trip.
+                  </p>
+                </div>
+              )}
+
               <div className="flex items-center gap-2 bg-slate-800/60 p-3 rounded-xl border border-slate-700">
                 <input type="checkbox" id="tds" checked={isTds} onChange={(e) => setIsTds(e.target.checked)} className="rounded text-amber-500" />
                 <label htmlFor="tds" className="text-xs text-white font-medium cursor-pointer">
@@ -6263,8 +6343,10 @@
                   <div className="text-base font-bold font-mono text-blue-400 mt-0.5">{formatCurr(netRent)}</div>
                 </div>
                 <div className="bg-purple-500/10 border border-purple-500/20 p-2.5 rounded-lg">
-                  <span className="text-[10px] uppercase font-bold text-purple-300">Driver 15% Salary</span>
-                  <div className="text-base font-bold font-mono text-purple-300 mt-0.5">{formatCurr(driver15)}</div>
+                  <span className="text-[10px] uppercase font-bold text-purple-300">
+                    {isAutoSalary ? `Driver ${defaultDrvRate}% Salary` : 'Driver Salary (Manual)'}
+                  </span>
+                  <div className="text-base font-bold font-mono text-purple-300 mt-0.5">{formatCurr(driverSalary)}</div>
                 </div>
                 <div className="bg-amber-500/10 border border-amber-500/20 p-2.5 rounded-lg">
                   <span className="text-[10px] uppercase font-bold text-amber-300">Company Due (Gross - Adv - Comm - TDS)</span>
@@ -7144,14 +7226,28 @@
 
       // Rules & Formulas State
       const [driverSalaryPct, setDriverSalaryPct] = useState(String(activeRules?.defaultDriverSalaryPercent ?? 15));
+      const [autoSalaryEnabled, setAutoSalaryEnabled] = useState(activeRules?.autoDriverSalaryEnabled !== false);
       const [tdsPct, setTdsPct] = useState(String(activeRules?.defaultTdsPercent ?? 1));
       const [rulesSaved, setRulesSaved] = useState(false);
+
+      useEffect(() => {
+        if (activeRules) {
+          setDriverSalaryPct(String(activeRules.defaultDriverSalaryPercent ?? 15));
+          setAutoSalaryEnabled(activeRules.autoDriverSalaryEnabled !== false);
+          setTdsPct(String(activeRules.defaultTdsPercent ?? 1));
+        }
+      }, [activeRules]);
+
       const handleSaveRules = (e) => {
         e.preventDefault();
         const dVal = parseFloat(driverSalaryPct);
         const tVal = parseFloat(tdsPct);
         if (isNaN(dVal) || isNaN(tVal) || dVal < 0 || tVal < 0) return alert('Enter valid percentage');
-        updateRules({ defaultDriverSalaryPercent: dVal, defaultTdsPercent: tVal });
+        updateRules({
+          defaultDriverSalaryPercent: dVal,
+          defaultTdsPercent: tVal,
+          autoDriverSalaryEnabled: autoSalaryEnabled
+        });
         setRulesSaved(true);
         setTimeout(() => setRulesSaved(false), 3000);
       };
@@ -7491,25 +7587,46 @@
                     )}
 
                     <form onSubmit={handleSaveRules} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="p-4 bg-slate-800/40 rounded-xl border border-slate-700/80 space-y-2">
-                        <label className="block text-xs font-bold text-purple-300">
-                          Default Driver Salary Commission (%)
-                        </label>
-                        <p className="text-[11px] text-slate-400 leading-relaxed">
-                          Calculated as % of Net Rent (Agreed Freight minus TDS minus Broker Commission).
-                        </p>
-                        <div className="flex items-center gap-2 pt-1">
-                          <input
-                            type="number"
-                            step="0.1"
-                            min="0"
-                            max="100"
-                            value={driverSalaryPct}
-                            onChange={(e) => setDriverSalaryPct(e.target.value)}
-                            className="w-28 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono font-bold"
-                          />
-                          <span className="text-xs text-slate-400 font-bold">%</span>
+                      <div className="p-4 bg-slate-800/40 rounded-xl border border-slate-700/80 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-xs font-bold text-purple-300">
+                            Driver Salary Calculation Mode
+                          </label>
+                          <label className="relative inline-flex items-center cursor-pointer" title="Toggle Auto Percentage vs Manual Entry">
+                            <input
+                              type="checkbox"
+                              checked={autoSalaryEnabled}
+                              onChange={(e) => setAutoSalaryEnabled(e.target.checked)}
+                              className="sr-only peer"
+                            />
+                            <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-600"></div>
+                          </label>
                         </div>
+                        <p className="text-[11px] text-slate-400 leading-relaxed">
+                          {autoSalaryEnabled
+                            ? 'Auto Percentage: Automatically calculates driver salary as % of Net Rent on every trip.'
+                            : 'Manual Entry: Auto-percentage is OFF. You enter the exact Driver Salary (₹) manually when recording each trip.'}
+                        </p>
+                        {autoSalaryEnabled ? (
+                          <div className="flex items-center gap-2 pt-1">
+                            <input
+                              type="number"
+                              step="0.1"
+                              min="0"
+                              max="100"
+                              value={driverSalaryPct}
+                              onChange={(e) => setDriverSalaryPct(e.target.value)}
+                              className="w-28 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono font-bold"
+                            />
+                            <span className="text-xs text-slate-400 font-bold">% of Net Rent</span>
+                          </div>
+                        ) : (
+                          <div className="pt-1">
+                            <span className="inline-flex items-center gap-1.5 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-lg font-semibold">
+                              <span>✍️</span> Manual Salary Entry (₹) Active
+                            </span>
+                          </div>
+                        )}
                       </div>
 
                       <div className="p-4 bg-slate-800/40 rounded-xl border border-slate-700/80 space-y-2">
