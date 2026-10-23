@@ -2014,9 +2014,13 @@
       const deleteExpensesBatch = (ids) => {
         if (!ids || ids.length === 0) return;
         const idSet = new Set(ids);
-        setExpenses(prev => prev.filter(e => !idSet.has(e.id)));
-        if (storageMode === 'cloud' && supabaseClient && currentUser && !currentUser.isDemo) {
-          safeCloudExec(supabaseClient.from('expenses').delete().in('id', ids), 'BatchDeleteStatementExpenses');
+        setExpenses(prev => {
+          const updated = prev.filter(e => !idSet.has(e.id));
+          try { localStorage.setItem(`${STORAGE_KEY}_expenses`, JSON.stringify(updated)); } catch(err){}
+          return updated;
+        });
+        if (supabaseClient) {
+          safeCloudExec(supabaseClient.from('expenses').delete().in('id', ids), 'BatchDeleteExpenses');
         }
       };
 
@@ -2233,6 +2237,56 @@
         return Number(trip.totalRent || 0) - (directOperationalExp + drvSal + comm + tds);
       };
 
+      // Find the active ongoing trip for a truck on an expense date:
+      // Any fuel or FASTag expense from the start of a trip up until the start date of the NEXT trip belongs to that trip.
+      const findOngoingTripForTruck = (truckId, expenseDate) => {
+        if (!truckId || !expenseDate) return null;
+        const truckTrips = scopedTrips.filter(t => t.truckId === truckId && t.date);
+        if (truckTrips.length === 0) return null;
+        // scopedTrips is already sorted descending by date!
+        return truckTrips.find(t => t.date <= expenseDate) || null;
+      };
+
+      // Relink any currently unlinked fuel/fastag expenses in ledger based on their date window
+      const relinkUnlinkedExpensesToTrips = () => {
+        let updatedCount = 0;
+        const updatedList = expenses.map(exp => {
+          if (exp.profileId !== activeProfileId) return exp;
+          if (exp.tripId || !exp.truckId || !exp.date) return exp;
+          if (exp.category === 'DIESEL' || exp.category === 'TOLL') {
+            const matchedTrip = findOngoingTripForTruck(exp.truckId, exp.date);
+            if (matchedTrip) {
+              updatedCount++;
+              return { ...exp, tripId: matchedTrip.id };
+            }
+          }
+          return exp;
+        });
+
+        if (updatedCount > 0) {
+          setExpenses(updatedList);
+          try { localStorage.setItem(`${STORAGE_KEY}_expenses`, JSON.stringify(updatedList)); } catch(e){}
+          if (supabaseClient) {
+            const newlyLinked = updatedList.filter(e => e.tripId && !expenses.find(old => old.id === e.id && old.tripId));
+            const payloads = newlyLinked.map(e => ({
+              id: e.id,
+              profile_id: e.profileId,
+              truck_id: e.truckId,
+              trip_id: e.tripId,
+              date: e.date,
+              category: e.category,
+              amount: Number(e.amount) || 0,
+              payment_method: e.paymentMethod,
+              is_reimbursable: Boolean(e.isReimbursable),
+              notes: e.notes || '',
+              is_simulation: false
+            }));
+            safeCloudExec(supabaseClient.from('expenses').upsert(payloads), 'RelinkExpensesToTrips');
+          }
+        }
+        return updatedCount;
+      };
+
       // Automated Email Parsing Engine for Toll & Fuel Debits
       const syncExpensesFromEmails = (customSampleEmails = null, overrideConfig = null) => {
         const config = overrideConfig || activeEmailConfig;
@@ -2382,10 +2436,8 @@
             || fullText.match(/Toll\s*Plaza\s*[:\-]?\s*([A-Za-z0-9\s\-]{3,30})/i);
           const plazaName = plazaMatch ? plazaMatch[1].trim() : null;
 
-          // Tag current ongoing trip for that truck based on the email's actual transaction date:
-          // scopedTrips is sorted descending by date. Find the latest trip that started on or before the transaction date.
-          const truckTripsDesc = scopedTrips.filter(t => t.truckId === targetTruckId);
-          const ongoingTrip = truckTripsDesc.find(t => t.date <= actualDate);
+          // Tag active ongoing trip for that truck: fuel and FASTag debits from trip start until the start of next trip belong to this trip
+          const ongoingTrip = findOngoingTripForTruck(targetTruckId, actualDate);
 
           const deterministicId = mail.id ? `exp-gmail-${mail.id}` : `exp-auto-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
           const curExpenses = expensesRef?.current || expenses || [];
@@ -2934,6 +2986,7 @@
           addDriver, updateDriver, deleteDriver,
           getTruckReg, getCompanyName, getDriverName,
           getTripExpenses, getTripReimbursable, getTripBalancePending, getTripProfit,
+          findOngoingTripForTruck, relinkUnlinkedExpensesToTrips,
           clearAllUserData, deleteAccount,
           storageMode, setStorageMode,
           cloudSyncStatus,
@@ -6652,7 +6705,8 @@
       const {
         trucks, trips, expenses, activeProfile,
         fuelStatementLogs, addFuelStatementLog, deleteFuelStatementLog,
-        addExpensesBatch, deleteExpensesBatch
+        addExpensesBatch, deleteExpensesBatch,
+        findOngoingTripForTruck, relinkUnlinkedExpensesToTrips
       } = useFleet();
 
       const [isDragging, setIsDragging] = useState(false);
@@ -7012,10 +7066,11 @@
             }
           }
 
-          // Trip linking lookup
+          // Trip linking lookup:
+          // Tags the trip starting on or before parsedDate, whose window extends until the start of the next trip
           let linkedTrip = null;
           if (matchedTruck && parsedDate) {
-            linkedTrip = trips.find(tr => tr.truckId === matchedTruck.id && tr.date === parsedDate);
+            linkedTrip = findOngoingTripForTruck(matchedTruck.id, parsedDate);
           }
 
           items.push({
@@ -7200,11 +7255,14 @@
 
         let idsToDelete = Array.isArray(log.expenseIds) && log.expenseIds.length > 0 ? [...log.expenseIds] : [];
 
-        // Also check by [stmt:id] or fallback period match if uploaded earlier
+        // Also check by [stmt:id], statementId, or period match in ledger
         const matchingByStmt = expenses.filter(e => {
           if (e.notes && e.notes.includes(`[stmt:${log.id}]`)) return true;
           if (idsToDelete.includes(e.id)) return true;
-          if (!log.expenseIds && e.category === 'DIESEL' && e.notes && e.notes.includes('Fuel Statement Import') && e.date >= log.periodStart && e.date <= log.periodEnd) return true;
+          if (e.statementId && e.statementId === log.id) return true;
+          if (e.category === 'DIESEL' && (e.paymentMethod === 'Fuel Card (Statement)' || (e.notes && (e.notes.includes('Fuel Statement') || e.notes.includes('[txn:'))))) {
+            if (log.periodStart && log.periodEnd && e.date >= log.periodStart && e.date <= log.periodEnd) return true;
+          }
           return false;
         }).map(e => e.id);
 
@@ -7216,6 +7274,14 @@
         deleteFuelStatementLog(log.id);
         notify(`Statement and ${allIds.length} fuel transactions were deleted from your ledger.`);
       };
+
+      // Find all statement fuel expenses currently recorded in the active ledger
+      const statementExpensesInLedger = useMemo(() => {
+        return (expenses || []).filter(e => {
+          return e.paymentMethod === 'Fuel Card (Statement)' ||
+            (e.notes && (e.notes.includes('Fuel Statement') || e.notes.includes('[stmt:')));
+        });
+      }, [expenses]);
 
       const handleClearStaged = () => {
         setRawRows([]);
@@ -7672,6 +7738,54 @@
               </div>
             </div>
           )}
+
+          {/* 2.5 LEDGER STATEMENT EXPENSES & TRIP LINKING MANAGEMENT */}
+          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h4 className="text-xs font-bold text-white flex items-center gap-2">
+                  <span>⛽</span> Statement Fuel Expenses in Ledger:
+                  <span className="text-amber-400 font-mono font-bold">{statementExpensesInLedger.length} records</span>
+                  <span className="text-slate-400 font-mono">({formatCurr(statementExpensesInLedger.reduce((sum, e) => sum + Number(e.amount || 0), 0))})</span>
+                </h4>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Fuel and FASTag debits automatically stay linked to each trip until the next trip start date (e.g. Oct 2 to Oct 17 link to Oct 2 trip).
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const count = relinkUnlinkedExpensesToTrips();
+                    if (count > 0) {
+                      notify(`⚡ Successfully linked ${count} unlinked expenses to their ongoing trips!`);
+                    } else {
+                      notify('All fuel and toll expenses are already linked to their active trips.');
+                    }
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl border border-cyan-800/60 bg-cyan-950/40 hover:bg-cyan-900/60 text-xs text-cyan-300 font-bold transition flex items-center gap-1.5"
+                  title="Auto-links unlinked FASTag and Fuel expenses to their trip date window"
+                >
+                  <span>⚡ Auto-Link Unlinked Expenses</span>
+                </button>
+                {statementExpensesInLedger.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm(`Purge and delete ALL ${statementExpensesInLedger.length} statement fuel expenses from your ledger and database?\n\nThis will completely clean out any old or leftover statement transactions so you can re-import cleanly.`)) {
+                        deleteExpensesBatch(statementExpensesInLedger.map(e => e.id));
+                        notify(`Permanently deleted ${statementExpensesInLedger.length} statement fuel expenses from ledger.`);
+                      }
+                    }}
+                    className="px-3.5 py-1.5 rounded-xl border border-rose-900/60 bg-rose-950/40 hover:bg-rose-900/60 text-xs text-rose-300 font-bold transition flex items-center gap-1.5"
+                    title="Clean out all statement-imported fuel expenses from your ledger"
+                  >
+                    <span>🗑️ Clean Out All Statement Fuel Expenses</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
 
           {/* 3. STATEMENT UPLOAD HISTORY & AUDIT LOG */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
