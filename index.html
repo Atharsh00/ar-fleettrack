@@ -2318,6 +2318,11 @@
         ];
 
         let createdCount = 0;
+        let skippedNoAmountCount = 0;
+        let skippedUnmatchedTruckCount = 0;
+        let skippedDuplicateCount = 0;
+        let skippedBoundsCount = 0;
+        const unmatchedVehiclesSet = new Set();
         const newExpensesCreated = [];
         const successfulEmailIds = [];
 
@@ -2339,6 +2344,8 @@
             .replace(/<[^>]+>/g, ' ')
             .replace(/&nbsp;/gi, ' ')
             .replace(/&amp;/gi, '&')
+            .replace(/&lt;/gi, '<')
+            .replace(/&gt;/gi, '>')
             .replace(/\s+/g, ' ')
             .trim();
           const cleanSubject = (mail.subject || '')
@@ -2346,57 +2353,82 @@
             .trim();
           const fullText = `${cleanSubject} ${cleanBody}`;
 
-          // Extract Amount (e.g., INR 650.00, Rs. 500, ₹ 500, 500/-, debited 500)
+          // Extract Amount (e.g., TXN AMOUNT: INR 120.00, Rs. 500, ₹ 500, 500/-, debited 500)
           let amount = 0;
-          
-          // 1. Primary: Explicit debit / charge phrases (most reliable for FASTag and bank alerts)
-          const pDebit = fullText.match(/(?:debited|deducted|charged|spent|toll\s*(?:fee|amount|charge)|fare|purchase)(?:\s*(?:is|of|by|with|for|:))?\s*(?:INR|Rs\.?|₹)?\s*([\d,]+(?:\.\d{1,2})?)/i);
-          
-          // 2. Secondary: Explicit currency with amount (e.g. INR 650, Rs. 500, ₹500, 500/-),
-          // explicitly excluding remaining/wallet balances to avoid false positives
-          const textWithoutBalance = fullText.replace(/(?:balance|avail(?:able)?|wallet|remaining|limit)(?:\s*(?:is|of|by|with|for|:))?\s*(?:INR|Rs\.?|₹)?\s*[\d,]+(?:\.\d+)?/gi, ' ');
+
+          // 1. Primary: Explicit labeled Transaction / Toll / Debit Amount fields (KVB FASTag, ICICI, SBI, HDFC, IDFC, Paytm)
+          const pLabeled = fullText.match(/\b(?:txn\s*amount|transaction\s*amount|toll\s*amount|toll\s*fare|toll\s*fee|toll\s*charge|debit\s*amount|debited\s*amount|total\s*amount|bill\s*amount|amount)\b\s*[:\-#=]?\s*(?:INR|Rs\.?|₹)?\s*([\d,]+(?:\.\d{1,2})?)/i);
+
+          // 2. Secondary: Explicit debit / charge phrases
+          const pDebit = fullText.match(/\b(?:debited|deducted|charged|spent|toll|fare|purchase)\b(?:\s*(?:is|of|by|with|for|:|-|=))?\s*(?:INR|Rs\.?|₹)?\s*([\d,]+(?:\.\d{1,2})?)/i);
+
+          // 3. Tertiary: Explicit currency with amount (excluding remaining/wallet balances to avoid false positives)
+          const textWithoutBalance = fullText.replace(/\b(?:balance|avail(?:able)?|wallet|remaining|limit|credit\s*limit)\b(?:\s*(?:is|of|by|with|for|:|-|=))?\s*(?:INR|Rs\.?|₹)?\s*[\d,]+(?:\.\d+)?/gi, ' ');
           const pCurr1 = textWithoutBalance.match(/(?:INR|Rs\.?|₹)\s*([\d,]+(?:\.\d{1,2})?)/i);
           const pCurr2 = textWithoutBalance.match(/([\d,]+(?:\.\d{1,2})?)\s*(?:INR|Rs\.?|₹|\/-)/i);
 
-          const amtStr = pDebit?.[1] || pCurr1?.[1] || pCurr2?.[1];
+          const amtStr = pLabeled?.[1] || pDebit?.[1] || pCurr1?.[1] || pCurr2?.[1];
           if (amtStr) {
             amount = parseFloat(amtStr.replace(/,/g, '')) || 0;
           }
 
-          if (amount <= 0) return; // Skip if no valid debit amount detected
+          if (amount <= 0) {
+            skippedNoAmountCount++;
+            return; // Skip if no valid debit amount detected
+          }
 
           // Real-World Sanity Bounds Check:
-          // Single FASTag toll debit cannot realistically exceed ₹5,000 (standard Indian highway tolls are ₹50 - ₹1,500)
-          // Fuel purchase cannot realistically exceed ₹60,000 (typical full diesel truck tank)
-          // This prevents reference numbers, plaza IDs, or postal codes from ever becoming expense amounts
-          if (category === 'TOLL' && (amount < 5 || amount > 5000)) {
-            console.warn(`[Email Sync] Skipped TOLL debit: Amount ₹${amount} is outside realistic highway toll bounds (₹5 - ₹5,000). Email Ref: ${mail.id}`);
+          // Commercial multi-axle truck tolls in India range from ₹10 to ₹25,000 (expressways & toll corridors)
+          // Fuel purchase: ₹50 to ₹80,000
+          if (category === 'TOLL' && (amount < 1 || amount > 25000)) {
+            skippedBoundsCount++;
+            console.warn(`[Email Sync] Skipped TOLL debit: Amount ₹${amount} is outside realistic highway toll bounds (₹1 - ₹25,000). Email Ref: ${mail.id}`);
             return;
           }
-          if (category === 'DIESEL' && (amount < 100 || amount > 60000)) {
-            console.warn(`[Email Sync] Skipped DIESEL purchase: Amount ₹${amount} is outside realistic commercial fuel bounds (₹100 - ₹60,000). Email Ref: ${mail.id}`);
+          if (category === 'DIESEL' && (amount < 50 || amount > 80000)) {
+            skippedBoundsCount++;
+            console.warn(`[Email Sync] Skipped DIESEL purchase: Amount ₹${amount} is outside realistic commercial fuel bounds (₹50 - ₹80,000). Email Ref: ${mail.id}`);
             return;
           }
 
-          // Extract Truck Number by checking registered trucks
+          // Extract candidate vehicle string from email if present
+          let candidateVehicleStr = null;
+          const vFieldMatch = fullText.match(/\b(?:vehicle\s*(?:number|no|#)?|vrn|reg(?:\s*no)?|truck(?:\s*no)?)\b\s*[:\-#=]?\s*([A-Za-z0-9\s\-]{6,20})/i);
+          if (vFieldMatch) {
+            candidateVehicleStr = vFieldMatch[1].trim();
+          }
+
+          const cleanText = fullText.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+          // Extract Truck Number by checking registered trucks in active profile
           let matchedTruck = scopedTrucks.find(trk => {
             const cleanReg = trk.registrationNumber.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-            const cleanText = fullText.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
             return cleanText.includes(cleanReg);
           });
 
-          // Fallback: search regex pattern like MH-12-RN-4825 or similar
+          // Fallback: search across all trucks registered in this account
           if (!matchedTruck) {
-            const regPattern = /[A-Z]{2}[-\s]?[0-9]{2}[-\s]?[A-Z]{1,3}[-\s]?[0-9]{4}/i;
+            matchedTruck = trucks.find(trk => {
+              const cleanReg = trk.registrationNumber.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+              return cleanText.includes(cleanReg);
+            });
+          }
+
+          // Fallback: search regex pattern like KA-01-AJ-8977 or KA01AJ8977
+          if (!matchedTruck) {
+            const regPattern = /\b([A-Z]{2}[-\s]?[0-9]{1,2}[-\s]?[A-Z]{1,3}[-\s]?[0-9]{4})\b/i;
             const regMatch = fullText.match(regPattern);
             if (regMatch) {
-              const matchedStr = regMatch[0].replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-              matchedTruck = scopedTrucks.find(t => t.registrationNumber.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() === matchedStr);
+              const matchedStr = regMatch[1].replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+              matchedTruck = scopedTrucks.find(t => t.registrationNumber.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() === matchedStr) ||
+                             trucks.find(t => t.registrationNumber.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() === matchedStr);
+              if (!candidateVehicleStr) candidateVehicleStr = regMatch[1];
             }
           }
           if (!matchedTruck) {
-            // Safety guard: If truck is not registered in this profile's Master Management, skip logging to avoid charging to wrong truck
-            console.warn(`[Email Sync] Skipped alert: Vehicle does not match any registered truck in this profile.`);
+            skippedUnmatchedTruckCount++;
+            if (candidateVehicleStr) unmatchedVehiclesSet.add(candidateVehicleStr);
+            console.warn(`[Email Sync] Skipped alert: Vehicle "${candidateVehicleStr || 'unrecognized'}" does not match any registered truck in Masters.`);
             return;
           }
 
@@ -2460,6 +2492,7 @@
           });
 
           if (isDuplicate) {
+            skippedDuplicateCount++;
             if (mail.id) successfulEmailIds.push(mail.id);
             return; // Skip duplicate email record
           }
@@ -2523,6 +2556,11 @@
           syncedCount: createdCount,
           expenses: newExpensesCreated,
           successfulEmailIds: successfulEmailIds,
+          skippedNoAmountCount,
+          skippedUnmatchedTruckCount,
+          unmatchedVehiclesFound: Array.from(unmatchedVehiclesSet),
+          skippedDuplicateCount,
+          skippedBoundsCount,
           lastSyncedAt: new Date().toISOString()
         };
       };
@@ -2544,7 +2582,7 @@
       };
 
       // 1-Click Live Gmail Sync Engine
-      const syncFromLiveGmail = async (accessToken, overrideConfig = null) => {
+      const syncFromLiveGmail = async (accessToken, overrideConfig = null, isForceScan = false) => {
         if (!accessToken) throw new Error('Gmail is not connected. Please click "Connect Gmail" first.');
 
         const config = overrideConfig || activeEmailConfig;
@@ -2564,11 +2602,12 @@
         }
         if (queries.length === 0) queries.push('subject:(FASTag OR Fuel OR Toll)');
 
-        // Query recent messages matching the subject keywords (from last 14 days)
-        const searchQuery = `newer_than:14d (${queries.join(' OR ')})`;
+        // Query recent messages matching the subject keywords (from last 30 days, or 60 days on Force Re-Scan)
+        const daysBack = isForceScan ? '60d' : '30d';
+        const searchQuery = `newer_than:${daysBack} (${queries.join(' OR ')})`;
 
-        // 1. Query matching messages
-        const listRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(searchQuery)}&maxResults=25`, {
+        // 1. Query matching messages (scan up to 100 recent messages)
+        const listRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(searchQuery)}&maxResults=100`, {
           headers: { Authorization: `Bearer ${accessToken}` }
         });
 
@@ -2635,23 +2674,28 @@
 
             let bodyContent = detail.snippet ? `${detail.snippet} ` : '';
             const rawBodyData = [];
-            if (detail.payload?.body?.data) {
-              rawBodyData.push(decodeBase64Url(detail.payload.body.data));
-            } else if (detail.payload?.parts) {
-              detail.payload.parts.forEach(part => {
-                if (part.body?.data) rawBodyData.push(decodeBase64Url(part.body.data));
-                if (part.parts) {
-                  part.parts.forEach(subPart => {
-                    if (subPart.body?.data) rawBodyData.push(decodeBase64Url(subPart.body.data));
-                  });
-                }
-              });
-            }
+
+            // Recursively collect all text and html parts regardless of nesting depth
+            const collectParts = (part) => {
+              if (!part) return;
+              if (part.body?.data) {
+                const decoded = decodeBase64Url(part.body.data);
+                if (decoded) rawBodyData.push(decoded);
+              }
+              if (Array.isArray(part.parts)) {
+                part.parts.forEach(collectParts);
+              }
+            };
+            collectParts(detail.payload);
+
             const cleanBodyHtml = rawBodyData.join(' ')
               .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
               .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
               .replace(/<[^>]+>/g, ' ')
               .replace(/&nbsp;/gi, ' ')
+              .replace(/&amp;/gi, '&')
+              .replace(/&lt;/gi, '<')
+              .replace(/&gt;/gi, '>')
               .replace(/\s+/g, ' ');
             bodyContent += cleanBodyHtml;
 
@@ -2694,9 +2738,27 @@
         }
 
         if (ingestRes.syncedCount === 0 && fetchedEmails.length > 0) {
+          const reasons = [];
+          if (ingestRes.skippedUnmatchedTruckCount > 0) {
+            const vList = ingestRes.unmatchedVehiclesFound.filter(Boolean).join(', ');
+            reasons.push(`${ingestRes.skippedUnmatchedTruckCount} email(s) had debits for vehicle(s) [${vList || 'unrecognized'}], which are not yet added in Masters > Trucks.`);
+          }
+          if (ingestRes.skippedDuplicateCount > 0) {
+            reasons.push(`${ingestRes.skippedDuplicateCount} email(s) were already recorded in your ledger.`);
+          }
+          if (ingestRes.skippedNoAmountCount > 0) {
+            reasons.push(`${ingestRes.skippedNoAmountCount} email(s) did not have a recognizable debit amount.`);
+          }
+          if (ingestRes.skippedBoundsCount > 0) {
+            reasons.push(`${ingestRes.skippedBoundsCount} email(s) had amounts outside normal toll limits.`);
+          }
+          const message = reasons.length > 0
+            ? `Scanned ${fetchedEmails.length} matching email(s):\n• ${reasons.join('\n• ')}`
+            : `Found ${fetchedEmails.length} matching email(s), but could not process new expenses.`;
+
           return {
             syncedCount: 0,
-            message: `Found ${fetchedEmails.length} matching email(s), but could not detect a valid debit amount (e.g. ₹500 or Rs 650) in them.`
+            message
           };
         }
 
@@ -8621,7 +8683,7 @@
         });
       };
 
-      const handleSyncLiveGmail = async () => {
+      const handleSyncLiveGmail = async (isForce = false) => {
         if (!googleToken) {
           alert('Please connect your Gmail account first.');
           return;
@@ -8639,7 +8701,7 @@
         updateEmailSyncConfig(currentConfig);
 
         try {
-          const res = await syncFromLiveGmail(googleToken, currentConfig);
+          const res = await syncFromLiveGmail(googleToken, currentConfig, isForce);
           setLastSyncTime(new Date().toLocaleTimeString());
           setSyncStatusMsg({
             error: false,
@@ -8657,7 +8719,7 @@
 
       const handleForceRescan = () => {
         localStorage.removeItem('fleet_processed_gmail_msg_ids');
-        handleSyncLiveGmail();
+        handleSyncLiveGmail(true);
       };
 
       // Security / Change Password State
