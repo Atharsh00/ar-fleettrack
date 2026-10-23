@@ -40,6 +40,8 @@
   <script crossorigin src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <!-- Google Identity Services (GIS) for 1-Click Gmail Connect -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <!-- SheetJS for Excel (.xlsx, .xls, .csv) Fuel Statement Ingestion -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
     .font-calligraphy {
       font-family: 'Great Vibes', 'Alex Brush', 'Allura', 'Brush Script MT', cursive;
@@ -497,6 +499,7 @@
       const [expenses, setExpenses] = useState(() => safeStorageGet(`${STORAGE_KEY}_expenses`, safeStorageGet('fleettrack_v3_expenses', initialExpenses)));
       const [driverPayments, setDriverPayments] = useState(() => safeStorageGet(`${STORAGE_KEY}_dp`, safeStorageGet('fleettrack_v3_dp', initialDriverPayments)));
       const [settlements, setSettlements] = useState(() => safeStorageGet(`${STORAGE_KEY}_settlements`, safeStorageGet('fleettrack_v3_settlements', initialSettlements)));
+      const [fuelStatementLogs, setFuelStatementLogs] = useState(() => safeStorageGet(`${STORAGE_KEY}_fuel_statement_logs`, []));
 
       const [dateFilter, setDateFilter] = useState({ preset: 'all', startDate: '', endDate: '' });
       const [showExportModal, setShowExportModal] = useState(false);
@@ -552,6 +555,7 @@
       useEffect(() => { localStorage.setItem(`${STORAGE_KEY}_expenses`, JSON.stringify(expenses)); }, [expenses]);
       useEffect(() => { localStorage.setItem(`${STORAGE_KEY}_dp`, JSON.stringify(driverPayments)); }, [driverPayments]);
       useEffect(() => { localStorage.setItem(`${STORAGE_KEY}_settlements`, JSON.stringify(settlements)); }, [settlements]);
+      useEffect(() => { localStorage.setItem(`${STORAGE_KEY}_fuel_statement_logs`, JSON.stringify(fuelStatementLogs)); }, [fuelStatementLogs]);
 
       const [showChangePassModal, setShowChangePassModal] = useState(false);
 
@@ -1301,6 +1305,7 @@
         setExpenses(prev => prev.filter(e => e.profileId !== id));
         setDriverPayments(prev => prev.filter(p => p.profileId !== id));
         setSettlements(prev => prev.filter(s => s.profileId !== id));
+        setFuelStatementLogs(prev => (prev || []).filter(l => l.profileId !== id));
 
         if (supabaseClient && currentUser && !currentUser.isDemo) {
           try {
@@ -1354,6 +1359,24 @@
       }, [expenses, activeProfileId]);
       const scopedDriverPayments = useMemo(() => [...driverPayments.filter(p => p.profileId === activeProfileId)].sort(compareRecordsDesc), [driverPayments, activeProfileId]);
       const scopedSettlements = useMemo(() => [...settlements.filter(s => s.profileId === activeProfileId)].sort(compareRecordsDesc), [settlements, activeProfileId]);
+      const scopedFuelStatementLogs = useMemo(() => {
+        return (fuelStatementLogs || []).filter(l => l.profileId === activeProfileId);
+      }, [fuelStatementLogs, activeProfileId]);
+
+      const addFuelStatementLog = (entry) => {
+        const newLog = {
+          id: `stmt-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          profileId: activeProfileId,
+          uploadedAt: new Date().toISOString(),
+          ...entry
+        };
+        setFuelStatementLogs(prev => [newLog, ...(prev || [])]);
+        return newLog;
+      };
+
+      const deleteFuelStatementLog = (id) => {
+        setFuelStatementLogs(prev => (prev || []).filter(l => l.id !== id));
+      };
 
       // Fresh state refs for background timers & workers to avoid stale closures
       const expensesRef = useRef(expenses);
@@ -1966,6 +1989,26 @@
         setExpenses(prev => prev.filter(e => e.id !== id));
         if (storageMode === 'cloud' && supabaseClient) {
           safeCloudExec(supabaseClient.from('expenses').delete().eq('id', id), 'DeleteExpense');
+        }
+      };
+      const addExpensesBatch = (newExpenses) => {
+        if (!newExpenses || newExpenses.length === 0) return;
+        setExpenses(prev => [...newExpenses, ...prev]);
+        if (storageMode === 'cloud' && supabaseClient && currentUser && !currentUser.isDemo) {
+          const dbPayloads = newExpenses.map(e => ({
+            id: e.id,
+            profile_id: e.profileId,
+            truck_id: e.truckId,
+            trip_id: e.tripId || null,
+            date: e.date,
+            category: e.category,
+            amount: Number(e.amount) || 0,
+            payment_method: e.paymentMethod,
+            is_reimbursable: Boolean(e.isReimbursable),
+            notes: e.notes || '',
+            is_simulation: false
+          }));
+          safeCloudExec(supabaseClient.from('expenses').upsert(dbPayloads), 'BatchStatementExpenses');
         }
       };
 
@@ -2832,6 +2875,7 @@
         setExpenses(prev => prev.filter(e => !profIds.includes(e.profileId)));
         setDriverPayments(prev => prev.filter(d => !profIds.includes(d.profileId)));
         setSettlements(prev => prev.filter(s => !profIds.includes(s.profileId)));
+        setFuelStatementLogs(prev => prev.filter(l => !profIds.includes(l.profileId)));
         setTrucks(prev => prev.filter(t => !profIds.includes(t.profileId)));
         setCompanies(prev => prev.filter(c => !profIds.includes(c.profileId)));
         setDrivers(prev => prev.filter(d => !profIds.includes(d.profileId)));
@@ -2873,9 +2917,10 @@
           filteredTrips, filteredExpenses, filteredDriverPayments, filteredSettlements,
           summaryMetrics, dateFilter, setDateFilter, currency,
           addTrip, updateTrip, deleteTrip,
-          addTruckExpense, updateTruckExpense, deleteTruckExpense,
+          addTruckExpense, updateTruckExpense, deleteTruckExpense, addExpensesBatch,
           addDriverPayment, updateDriverPayment, deleteDriverPayment,
           addSettlement, updateSettlement, deleteSettlement,
+          fuelStatementLogs: scopedFuelStatementLogs, addFuelStatementLog, deleteFuelStatementLog,
           addTruck, updateTruck, deleteTruck,
           addCompany, updateCompany, deleteCompany,
           addDriver, updateDriver, deleteDriver,
@@ -6217,6 +6262,7 @@
               { id: 'trip', label: '1. Trip & Freight Entry' },
               { id: 'expense', label: '2. Truck Expense Entry' },
               { id: 'driver', label: '3. Driver Payout & Claims' },
+              { id: 'fuel_statement', label: '4. 📊 Excel Fuel Statement Import' },
             ].map(f => (
               <button
                 key={f.id}
@@ -6585,6 +6631,1079 @@
               </div>
             </form>
           )}
+
+          {formType === 'fuel_statement' && (
+            <FuelStatementImportSection notify={notify} />
+          )}
+        </div>
+      );
+    }
+
+    // --- FUEL STATEMENT EXCEL & CSV INGESTION COMPONENT ---
+    function FuelStatementImportSection({ notify }) {
+      const {
+        trucks, trips, expenses, activeProfile,
+        fuelStatementLogs, addFuelStatementLog, deleteFuelStatementLog,
+        addExpensesBatch
+      } = useFleet();
+
+      const [isDragging, setIsDragging] = useState(false);
+      const [isLoading, setIsLoading] = useState(false);
+      const [fileName, setFileName] = useState('');
+      const [rawRows, setRawRows] = useState([]);
+      const [headerRowIdx, setHeaderRowIdx] = useState(0);
+      const [colMapping, setColMapping] = useState({
+        dateCol: -1,
+        truckCol: -1,
+        amountCol: -1,
+        txnIdCol: -1,
+        litresCol: -1,
+        rateCol: -1,
+        stationCol: -1,
+        cityCol: -1,
+        typeCol: -1
+      });
+      const [showOverrides, setShowOverrides] = useState(false);
+      const [importSuccess, setImportSuccess] = useState(null);
+      const fileInputRef = useRef(null);
+
+      // Helper: parse dates from various formats (01-Oct-2026, 01/10/2026, 2026-10-01, Excel serial)
+      const parseAnyDateString = (val) => {
+        if (!val) return '';
+        if (val instanceof Date && !isNaN(val.getTime())) {
+          const y = val.getFullYear();
+          const m = String(val.getMonth() + 1).padStart(2, '0');
+          const d = String(val.getDate()).padStart(2, '0');
+          return `${y}-${m}-${d}`;
+        }
+        if (typeof val === 'number' && val > 30000 && val < 60000) {
+          const jsDate = new Date(Math.round((val - 25569) * 86400 * 1000));
+          if (!isNaN(jsDate.getTime())) {
+            const y = jsDate.getUTCFullYear();
+            const m = String(jsDate.getUTCMonth() + 1).padStart(2, '0');
+            const d = String(jsDate.getUTCDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+          }
+        }
+        const s = String(val).trim();
+        const months = { jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06', jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12' };
+
+        // Match DD-MMM-YYYY or DD MMM YYYY or DD-MMM-YY (e.g. 01-Oct-2026)
+        const m1 = s.match(/^([0-3]?\d)[-\s/]([a-zA-Z]{3,9})[-\s/](\d{2,4})/);
+        if (m1) {
+          const d = m1[1].padStart(2, '0');
+          const mKey = m1[2].toLowerCase().slice(0, 3);
+          const m = months[mKey];
+          let y = m1[3];
+          if (y.length === 2) y = '20' + y;
+          if (m) return `${y}-${m}-${d}`;
+        }
+        // Match YYYY-MM-DD
+        const m2 = s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+        if (m2) {
+          return `${m2[1]}-${m2[2].padStart(2, '0')}-${m2[3].padStart(2, '0')}`;
+        }
+        // Match DD-MM-YYYY or DD/MM/YYYY
+        const m3 = s.match(/^([0-3]?\d)[-\/.]([0-1]?\d)[-\/.](\d{2,4})/);
+        if (m3) {
+          let y = m3[3];
+          if (y.length === 2) y = '20' + y;
+          return `${y}-${m3[2].padStart(2, '0')}-${m3[1].padStart(2, '0')}`;
+        }
+        return '';
+      };
+
+      // Helper: Native CSV parser fallback
+      const parseCsvTo2DArray = (text) => {
+        const lines = text.split(/\r\n|\n|\r/);
+        const result = [];
+        for (let line of lines) {
+          if (!line.trim()) continue;
+          const row = [];
+          let insideQuotes = false;
+          let entry = '';
+          for (let i = 0; i < line.length; i++) {
+            const c = line[i];
+            if (c === '"') {
+              if (insideQuotes && line[i + 1] === '"') {
+                entry += '"';
+                i++;
+              } else {
+                insideQuotes = !insideQuotes;
+              }
+            } else if (c === ',' && !insideQuotes) {
+              row.push(entry.trim());
+              entry = '';
+            } else {
+              entry += c;
+            }
+          }
+          row.push(entry.trim());
+          result.push(row);
+        }
+        return result;
+      };
+
+      // Header row auto-detection (scans metadata header rows e.g. row 0-25)
+      const detectHeaderRow = (rows) => {
+        if (!rows || rows.length === 0) return 0;
+        for (let i = 0; i < Math.min(rows.length, 30); i++) {
+          const rowStr = (rows[i] || []).map(cell => String(cell || '').toLowerCase()).join(' ');
+          const hasDate = rowStr.includes('date');
+          const hasAmount = rowStr.includes('amount') || rowStr.includes('total') || rowStr.includes('rs.') || rowStr.includes('rs');
+          const hasTruck = rowStr.includes('vehicle') || rowStr.includes('truck') || rowStr.includes('card') || rowStr.includes('txn');
+          if (hasDate && hasAmount && hasTruck) return i;
+        }
+        for (let i = 0; i < Math.min(rows.length, 30); i++) {
+          const rowStr = (rows[i] || []).map(cell => String(cell || '').toLowerCase()).join(' ');
+          if (rowStr.includes('date') && (rowStr.includes('amount') || rowStr.includes('rs'))) return i;
+        }
+        return 0;
+      };
+
+      // Column auto-detection based on header strings
+      const detectColumnMapping = (headers) => {
+        const mapping = {
+          dateCol: -1,
+          truckCol: -1,
+          amountCol: -1,
+          txnIdCol: -1,
+          litresCol: -1,
+          rateCol: -1,
+          stationCol: -1,
+          cityCol: -1,
+          typeCol: -1
+        };
+        if (!headers || !headers.length) return mapping;
+        const clean = headers.map(h => String(h || '').toLowerCase().replace(/[^a-z0-9]/g, ' '));
+
+        clean.forEach((h, idx) => {
+          if (mapping.txnIdCol === -1 && (h.includes('transaction id') || h.includes('txn id') || h.includes('txnid') || h.includes('reference no') || h.includes('ref no') || h.includes('bill no') || h.includes('invoice no'))) {
+            mapping.txnIdCol = idx;
+          }
+          if (mapping.dateCol === -1 && (h.includes('transaction date') || h.includes('txn date') || h.includes('txndate') || h.includes('trans date') || h.includes('date') || h.includes('bill date'))) {
+            mapping.dateCol = idx;
+          }
+          if (mapping.truckCol === -1 && (h.includes('vehicle number') || h.includes('vehicleno') || h.includes('vehicle') || h.includes('truck no') || h.includes('truck') || h.includes('reg no') || h.includes('registration'))) {
+            mapping.truckCol = idx;
+          }
+          if (mapping.amountCol === -1 && (h.includes('total transaction amount') || h.includes('transaction amount') || h.includes('total amount') || h.includes('net amount') || h.includes('fuel amount') || h.includes('total rs') || h.includes('amount rs') || h.includes('amount'))) {
+            mapping.amountCol = idx;
+          }
+          if (mapping.litresCol === -1 && (h.includes('volume') || h.includes('litres') || h.includes('liters') || h.includes('quantity') || h.includes('qty') || h.includes('ltr'))) {
+            mapping.litresCol = idx;
+          }
+          if (mapping.rateCol === -1 && (h.includes('rate') || h.includes('price litre') || h.includes('price ltr') || h.includes('rate ltr'))) {
+            mapping.rateCol = idx;
+          }
+          if (mapping.stationCol === -1 && (h.includes('retail outlet') || h.includes('pump') || h.includes('station') || h.includes('merchant') || h.includes('vendor'))) {
+            mapping.stationCol = idx;
+          }
+          if (mapping.cityCol === -1 && (h.includes('city') || h.includes('location') || h.includes('place'))) {
+            mapping.cityCol = idx;
+          }
+          if (mapping.typeCol === -1 && (h.includes('credit debit') || h.includes('cr dr') || h.includes('type') || h.includes('dr cr'))) {
+            mapping.typeCol = idx;
+          }
+        });
+
+        // Fallbacks if not detected
+        if (mapping.dateCol === -1) {
+          mapping.dateCol = clean.findIndex(h => h.includes('date'));
+        }
+        if (mapping.amountCol === -1) {
+          mapping.amountCol = clean.findIndex(h => h.includes('amount') || h.includes('rs'));
+        }
+        if (mapping.truckCol === -1) {
+          mapping.truckCol = clean.findIndex(h => h.includes('vehicle') || h.includes('truck') || h.includes('card'));
+        }
+
+        return mapping;
+      };
+
+      // Read file and parse rows
+      const handleFileSelected = (file) => {
+        if (!file) return;
+        setIsLoading(true);
+        setImportSuccess(null);
+        setFileName(file.name);
+
+        const isExcel = /\.(xlsx|xls)$/i.test(file.name);
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+          try {
+            let parsed2DRows = [];
+            if (isExcel && window.XLSX) {
+              const data = new Uint8Array(e.target.result);
+              const workbook = window.XLSX.read(data, { type: 'array', cellDates: true });
+              const firstSheetName = workbook.SheetNames[0];
+              const worksheet = workbook.Sheets[firstSheetName];
+              parsed2DRows = window.XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false, dateNF: 'yyyy-mm-dd' });
+            } else {
+              const text = typeof e.target.result === 'string' ? e.target.result : new TextDecoder('utf-8').decode(e.target.result);
+              parsed2DRows = parseCsvTo2DArray(text);
+            }
+
+            if (!parsed2DRows || parsed2DRows.length < 2) {
+              notify('Uploaded file contains insufficient rows');
+              setIsLoading(false);
+              return;
+            }
+
+            const hIdx = detectHeaderRow(parsed2DRows);
+            setHeaderRowIdx(hIdx);
+            setRawRows(parsed2DRows);
+
+            const headers = (parsed2DRows[hIdx] || []).map(cell => String(cell || '').trim());
+            const detectedMap = detectColumnMapping(headers);
+            setColMapping(detectedMap);
+            setIsLoading(false);
+          } catch (err) {
+            console.error('File parsing error:', err);
+            notify('Failed to parse statement file: ' + err.message);
+            setIsLoading(false);
+          }
+        };
+
+        reader.onerror = () => {
+          notify('Error reading file from disk');
+          setIsLoading(false);
+        };
+
+        if (isExcel) {
+          reader.readAsArrayBuffer(file);
+        } else {
+          reader.readAsText(file);
+        }
+      };
+
+      // Clean registration string for lookup
+      const cleanReg = (reg) => String(reg || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+      const truckMap = useMemo(() => {
+        const m = new Map();
+        trucks.forEach(t => {
+          const c = cleanReg(t.registrationNumber);
+          if (c) m.set(c, t);
+        });
+        return m;
+      }, [trucks]);
+
+      // Deduplication lookups from existing expenses
+      const { existingTxnIds, existingTruckDateKeys } = useMemo(() => {
+        const txnIds = new Set();
+        const truckDateKeys = new Set();
+        expenses.forEach(exp => {
+          if (exp.notes) {
+            const m = exp.notes.match(/\[txn:([^\]]+)\]/i);
+            if (m && m[1]) txnIds.add(m[1].trim().toLowerCase());
+          }
+          if (exp.category === 'DIESEL' && exp.truckId && exp.date) {
+            const roundedAmt = Math.round(Number(exp.amount) || 0);
+            truckDateKeys.add(`${exp.truckId}_${exp.date}_${roundedAmt}`);
+          }
+        });
+        return { existingTxnIds: txnIds, existingTruckDateKeys: truckDateKeys };
+      }, [expenses]);
+
+      // Parse data rows with column mapping & deduplication
+      const parsedData = useMemo(() => {
+        if (!rawRows || rawRows.length <= headerRowIdx + 1) return { items: [], summary: {} };
+
+        const headers = (rawRows[headerRowIdx] || []).map(c => String(c || '').trim());
+        const dataRows = rawRows.slice(headerRowIdx + 1);
+        const seenInBatchTxnIds = new Set();
+        const items = [];
+
+        let minDate = null;
+        let maxDate = null;
+        let totalFileAmt = 0;
+
+        // Try extracting metadata period from top lines (e.g. line 0-10: "Period,01 Oct 2026 to 23 Oct 2026")
+        for (let i = 0; i < headerRowIdx; i++) {
+          const metaStr = (rawRows[i] || []).join(' ');
+          const periodMatch = metaStr.match(/(\d{1,2}[-\s][A-Za-z]{3}[-\s]\d{2,4})\s+to\s+(\d{1,2}[-\s][A-Za-z]{3}[-\s]\d{2,4})/i);
+          if (periodMatch) {
+            const s = parseAnyDateString(periodMatch[1]);
+            const e = parseAnyDateString(periodMatch[2]);
+            if (s && e) {
+              minDate = s;
+              maxDate = e;
+              break;
+            }
+          }
+        }
+
+        dataRows.forEach((row, rIdx) => {
+          if (!row || row.length === 0 || !row.some(c => c !== undefined && c !== null && String(c).trim() !== '')) {
+            return; // Empty row
+          }
+
+          const rawDate = colMapping.dateCol >= 0 ? row[colMapping.dateCol] : '';
+          const rawTruck = colMapping.truckCol >= 0 ? row[colMapping.truckCol] : '';
+          const rawAmt = colMapping.amountCol >= 0 ? row[colMapping.amountCol] : '';
+          const rawTxnId = colMapping.txnIdCol >= 0 ? row[colMapping.txnIdCol] : '';
+          const rawLitres = colMapping.litresCol >= 0 ? row[colMapping.litresCol] : '';
+          const rawRate = colMapping.rateCol >= 0 ? row[colMapping.rateCol] : '';
+          const rawStation = colMapping.stationCol >= 0 ? row[colMapping.stationCol] : '';
+          const rawCity = colMapping.cityCol >= 0 ? row[colMapping.cityCol] : '';
+          const rawType = colMapping.typeCol >= 0 ? row[colMapping.typeCol] : '';
+
+          const parsedDate = parseAnyDateString(rawDate);
+          const cleanedAmtStr = String(rawAmt || '').replace(/[^0-9.]/g, '');
+          const parsedAmount = parseFloat(cleanedAmtStr) || 0;
+          const cleanedTruckStr = cleanReg(rawTruck);
+          const txnId = String(rawTxnId || '').trim();
+          const litres = parseFloat(String(rawLitres || '').replace(/[^0-9.]/g, '')) || null;
+          const rate = parseFloat(String(rawRate || '').replace(/[^0-9.]/g, '')) || null;
+          const station = String(rawStation || '').trim();
+          const city = String(rawCity || '').trim();
+          const typeStr = String(rawType || '').toLowerCase();
+
+          // Date tracking
+          if (parsedDate) {
+            if (!minDate || parsedDate < minDate) minDate = parsedDate;
+            if (!maxDate || parsedDate > maxDate) maxDate = parsedDate;
+          }
+
+          // Truck matching
+          let matchedTruck = truckMap.get(cleanedTruckStr);
+          if (!matchedTruck && cleanedTruckStr) {
+            matchedTruck = trucks.find(t => {
+              const reg = cleanReg(t.registrationNumber);
+              return reg.includes(cleanedTruckStr) || (cleanedTruckStr.length > 5 && reg.endsWith(cleanedTruckStr.slice(-4)));
+            });
+          }
+
+          // Status & Deduplication
+          let status = 'READY';
+          let statusMsg = 'Ready to Import';
+
+          if (typeStr.includes('credit') || (typeStr === 'cr' && !typeStr.includes('dr'))) {
+            status = 'CREDIT_REVERSAL';
+            statusMsg = 'Reversal / Cashback (Skipped)';
+          } else if (!parsedDate || parsedAmount <= 0) {
+            status = 'INVALID';
+            statusMsg = 'Missing date or amount';
+          } else if (!matchedTruck) {
+            status = 'UNMATCHED_TRUCK';
+            statusMsg = `Truck ${rawTruck} not in Masters`;
+          } else {
+            // Deduplication checks
+            const hasTxnMatch = txnId && (existingTxnIds.has(txnId.toLowerCase()) || seenInBatchTxnIds.has(txnId.toLowerCase()));
+            const roundedAmt = Math.round(parsedAmount);
+            const truckDateKey = `${matchedTruck.id}_${parsedDate}_${roundedAmt}`;
+            const hasTruckDateMatch = existingTruckDateKeys.has(truckDateKey);
+
+            if (hasTxnMatch || hasTruckDateMatch) {
+              status = 'DUPLICATE';
+              statusMsg = hasTxnMatch ? `Duplicate Txn ID (${txnId})` : 'Duplicate (Matches Truck, Date & Amount)';
+            } else {
+              if (txnId) seenInBatchTxnIds.add(txnId.toLowerCase());
+              totalFileAmt += parsedAmount;
+            }
+          }
+
+          // Trip linking lookup
+          let linkedTrip = null;
+          if (matchedTruck && parsedDate) {
+            linkedTrip = trips.find(tr => tr.truckId === matchedTruck.id && tr.date === parsedDate);
+          }
+
+          items.push({
+            id: `row-${rIdx}`,
+            rawDate,
+            parsedDate,
+            rawTruck,
+            cleanedTruckStr,
+            matchedTruck,
+            parsedAmount,
+            txnId,
+            litres,
+            rate,
+            station,
+            city,
+            linkedTrip,
+            status,
+            statusMsg
+          });
+        });
+
+        const readyCount = items.filter(i => i.status === 'READY').length;
+        const duplicateCount = items.filter(i => i.status === 'DUPLICATE').length;
+        const unmatchedCount = items.filter(i => i.status === 'UNMATCHED_TRUCK').length;
+        const reversalCount = items.filter(i => i.status === 'CREDIT_REVERSAL').length;
+
+        return {
+          headers,
+          items,
+          summary: {
+            totalRows: items.length,
+            readyCount,
+            duplicateCount,
+            unmatchedCount,
+            reversalCount,
+            totalReadyAmt: items.filter(i => i.status === 'READY').reduce((sum, i) => sum + i.parsedAmount, 0),
+            periodStart: minDate,
+            periodEnd: maxDate
+          }
+        };
+      }, [rawRows, headerRowIdx, colMapping, truckMap, existingTxnIds, existingTruckDateKeys, trucks, trips]);
+
+      // Automatic Date Gap Detection Banner Logic
+      const gapAnalysis = useMemo(() => {
+        if (!fuelStatementLogs || fuelStatementLogs.length === 0) {
+          return { status: 'NO_LOGS', gaps: [], coveredRanges: [] };
+        }
+
+        const validLogs = fuelStatementLogs
+          .filter(l => l.periodStart && l.periodEnd)
+          .map(l => ({
+            id: l.id,
+            start: l.periodStart,
+            end: l.periodEnd,
+            fileName: l.fileName
+          }))
+          .sort((a, b) => a.start.localeCompare(b.start));
+
+        if (validLogs.length === 0) {
+          return { status: 'NO_LOGS', gaps: [], coveredRanges: [] };
+        }
+
+        const addDays = (dStr, days) => {
+          const d = new Date(dStr);
+          d.setDate(d.getDate() + days);
+          return d.toISOString().split('T')[0];
+        };
+        const diffDays = (d1Str, d2Str) => {
+          const d1 = new Date(d1Str);
+          const d2 = new Date(d2Str);
+          return Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
+        };
+
+        const merged = [];
+        let cur = { ...validLogs[0] };
+
+        for (let i = 1; i < validLogs.length; i++) {
+          const next = validLogs[i];
+          const dayAfterCurEnd = addDays(cur.end, 1);
+          if (next.start <= dayAfterCurEnd) {
+            if (next.end > cur.end) cur.end = next.end;
+          } else {
+            merged.push(cur);
+            cur = { ...next };
+          }
+        }
+        merged.push(cur);
+
+        const gaps = [];
+        for (let i = 0; i < merged.length - 1; i++) {
+          const gapStart = addDays(merged[i].end, 1);
+          const gapEnd = addDays(merged[i + 1].start, -1);
+          const missingDays = diffDays(gapStart, gapEnd) + 1;
+          if (missingDays > 0) {
+            gaps.push({ start: gapStart, end: gapEnd, days: missingDays, isRecent: false });
+          }
+        }
+
+        const todayStr = new Date().toISOString().split('T')[0];
+        const lastMerged = merged[merged.length - 1];
+        if (lastMerged && lastMerged.end < todayStr) {
+          const recentGapStart = addDays(lastMerged.end, 1);
+          const recentMissingDays = diffDays(recentGapStart, todayStr);
+          if (recentMissingDays >= 3) {
+            gaps.push({ start: recentGapStart, end: todayStr, days: recentMissingDays, isRecent: true });
+          }
+        }
+
+        return {
+          status: gaps.length > 0 ? 'GAPS_FOUND' : 'COVERED',
+          gaps,
+          coveredRanges: merged
+        };
+      }, [fuelStatementLogs]);
+
+      // Confirm & Ingest Action
+      const handleConfirmIngest = () => {
+        const readyItems = parsedData.items.filter(i => i.status === 'READY');
+        if (readyItems.length === 0) {
+          notify('No ready transactions to import');
+          return;
+        }
+
+        const newExpenses = readyItems.map(item => ({
+          id: `exp-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
+          profileId: activeProfile?.id || 'prof-default',
+          truckId: item.matchedTruck.id,
+          tripId: item.linkedTrip ? item.linkedTrip.id : undefined,
+          date: item.parsedDate,
+          category: 'DIESEL',
+          amount: item.parsedAmount,
+          paymentMethod: 'Fuel Card (Statement)',
+          isReimbursable: false,
+          notes: `Fuel Statement Import - ${item.station ? item.station + ', ' : ''}${item.city ? item.city + ' | ' : ''}${item.litres ? item.litres + ' Ltrs @ ₹' + item.rate + '/L | ' : ''}[txn:${item.txnId || 'N/A'}]`
+        }));
+
+        addExpensesBatch(newExpenses);
+
+        const logEntry = addFuelStatementLog({
+          fileName: fileName || 'Statement.xlsx',
+          periodStart: parsedData.summary.periodStart || new Date().toISOString().split('T')[0],
+          periodEnd: parsedData.summary.periodEnd || new Date().toISOString().split('T')[0],
+          totalRows: parsedData.summary.totalRows,
+          importedCount: readyItems.length,
+          skippedDuplicates: parsedData.summary.duplicateCount,
+          totalAmount: parsedData.summary.totalReadyAmt
+        });
+
+        setImportSuccess({
+          fileName,
+          importedCount: readyItems.length,
+          skippedDuplicates: parsedData.summary.duplicateCount,
+          totalAmount: parsedData.summary.totalReadyAmt,
+          periodStart: parsedData.summary.periodStart,
+          periodEnd: parsedData.summary.periodEnd
+        });
+
+        notify(`🎉 Ingested ${readyItems.length} fuel transactions totaling ${formatCurr(parsedData.summary.totalReadyAmt)}!`);
+        setRawRows([]);
+        setFileName('');
+      };
+
+      const handleClearStaged = () => {
+        setRawRows([]);
+        setFileName('');
+        setImportSuccess(null);
+      };
+
+      return (
+        <div className="space-y-6 max-w-5xl mx-auto">
+          {/* 1. AUTOMATIC DATE GAP DETECTION BANNER */}
+          {gapAnalysis.status === 'GAPS_FOUND' && (
+            <div className="bg-amber-500/10 border-2 border-amber-500/40 rounded-2xl p-5 shadow-xl animate-fadeIn">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl">⚠️</span>
+                <div className="flex-1 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-bold text-amber-300 uppercase tracking-wide">
+                      Automatic Date Gap Detection: Missing Statement Periods
+                    </h4>
+                    <span className="text-[11px] bg-amber-500/20 text-amber-300 font-bold px-2.5 py-0.5 rounded-full border border-amber-500/30">
+                      {gapAnalysis.gaps.length} {gapAnalysis.gaps.length === 1 ? 'Date Gap' : 'Date Gaps'} Found
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    The following date ranges are missing between your uploaded fuel statements. Diesel expenses for trips conducted on these dates may not be accounted for:
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                    {gapAnalysis.gaps.map((gap, gIdx) => (
+                      <div key={gIdx} className="bg-slate-900/80 border border-amber-500/30 rounded-xl p-2.5 flex items-center justify-between">
+                        <div>
+                          <div className="text-xs font-mono font-bold text-white">
+                            📅 {formatDate(gap.start)} to {formatDate(gap.end)}
+                          </div>
+                          <div className="text-[10px] text-amber-400 font-medium">
+                            {gap.isRecent ? 'Recent Period (Pending Statement)' : 'Uncovered Historical Gap'}
+                          </div>
+                        </div>
+                        <span className="text-xs font-bold text-amber-300 bg-amber-950/60 border border-amber-800/60 px-2 py-1 rounded-lg">
+                          {gap.days} {gap.days === 1 ? 'day' : 'days'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {gapAnalysis.status === 'COVERED' && (
+            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 flex items-center justify-between shadow-md">
+              <div className="flex items-center gap-3">
+                <span className="text-xl">✅</span>
+                <div>
+                  <h4 className="text-xs font-bold text-emerald-300">Continuous Statement Coverage Active</h4>
+                  <p className="text-[11px] text-slate-300">
+                    No missing date gaps detected across your {fuelStatementLogs.length} uploaded statements ({formatDate(gapAnalysis.coveredRanges[0]?.start)} to {formatDate(gapAnalysis.coveredRanges[gapAnalysis.coveredRanges.length - 1]?.end)}).
+                  </p>
+                </div>
+              </div>
+              <span className="text-[10px] bg-emerald-500/20 text-emerald-400 font-mono font-bold px-3 py-1 rounded-full border border-emerald-500/30">
+                100% Reconciled
+              </span>
+            </div>
+          )}
+
+          {gapAnalysis.status === 'NO_LOGS' && (
+            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex items-center gap-3 text-xs text-slate-400">
+              <span className="text-xl">ℹ️</span>
+              <div>
+                <span className="font-bold text-slate-200">Date Gap Tracking Ready:</span> Upload your first fuel statement (Excel or CSV) below. Antigravity will automatically record covered date ranges and notify you if any future days or weeks are missed.
+              </div>
+            </div>
+          )}
+
+          {/* SUCCESS BANNER AFTER IMPORT */}
+          {importSuccess && (
+            <div className="bg-emerald-500/15 border-2 border-emerald-500/50 rounded-2xl p-5 shadow-2xl animate-fadeIn space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="text-3xl">🎉</span>
+                  <div>
+                    <h3 className="text-base font-bold text-emerald-300">Statement Ingestion Complete!</h3>
+                    <p className="text-xs text-slate-300">
+                      Successfully imported <strong className="text-white">{importSuccess.importedCount} transactions</strong> ({formatCurr(importSuccess.totalAmount)}) covering {formatDate(importSuccess.periodStart)} to {formatDate(importSuccess.periodEnd)}.
+                    </p>
+                  </div>
+                </div>
+                <button onClick={() => setImportSuccess(null)} className="text-slate-400 hover:text-white text-xs px-2 py-1">✕ Close</button>
+              </div>
+              {importSuccess.skippedDuplicates > 0 && (
+                <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 text-xs text-amber-300 flex items-center gap-2">
+                  <span>🛡️</span>
+                  <span><strong>{importSuccess.skippedDuplicates} duplicate records</strong> already existed in your accounts and were safely skipped.</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 2. FILE UPLOAD DROPZONE */}
+          {rawRows.length === 0 ? (
+            <div
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDragging(false);
+                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                  handleFileSelected(e.dataTransfer.files[0]);
+                }
+              }}
+              onClick={() => fileInputRef.current && fileInputRef.current.click()}
+              className={`border-2 border-dashed rounded-3xl p-10 text-center cursor-pointer transition-all ${
+                isDragging
+                  ? 'border-amber-400 bg-amber-500/10 scale-[1.01]'
+                  : 'border-slate-700 bg-slate-900/60 hover:border-amber-500/60 hover:bg-slate-900/90'
+              } shadow-xl`}
+            >
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={(e) => e.target.files && handleFileSelected(e.target.files[0])}
+                accept=".xlsx,.xls,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                className="hidden"
+              />
+              <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-3xl text-amber-400">
+                📊
+              </div>
+              <h3 className="text-base font-bold text-white mb-1">
+                Upload Fuel Card / Diesel Statement
+              </h3>
+              <p className="text-xs text-slate-400 max-w-md mx-auto mb-4">
+                Drag and drop your Excel statement (<strong className="text-slate-300">.xlsx, .xls</strong>) or <strong className="text-slate-300">.csv</strong> file here, or click to browse.
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-2 max-w-lg mx-auto text-[11px] text-slate-400">
+                <span className="bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-lg">⛽ Bharat Petroleum (BPCL SmartFleet)</span>
+                <span className="bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-lg">⛽ Indian Oil (XTRAPOWER)</span>
+                <span className="bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-lg">⛽ HPCL DriveTrack</span>
+                <span className="bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-lg">⛽ Shell Fleet</span>
+              </div>
+              {isLoading && (
+                <div className="mt-4 text-xs font-bold text-amber-400 animate-pulse">
+                  ⏳ Parsing statement and scanning transactions...
+                </div>
+              )}
+            </div>
+          ) : (
+            /* STAGED FILE PREVIEW & COLUMN CONFIG */
+            <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-5 animate-fadeIn">
+              {/* File Header Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-lg text-amber-400">
+                    📄
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-bold text-white font-mono">{fileName}</h3>
+                      <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full border border-slate-700">
+                        Header Row #{headerRowIdx + 1}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-400 mt-0.5">
+                      Period: <strong className="text-amber-400 font-mono">{formatDate(parsedData.summary.periodStart)}</strong> to <strong className="text-amber-400 font-mono">{formatDate(parsedData.summary.periodEnd)}</strong>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowOverrides(!showOverrides)}
+                    className="px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 font-medium transition"
+                  >
+                    ⚙️ {showOverrides ? 'Hide Column Mapping' : 'Adjust Column Mapping'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearStaged}
+                    className="px-3 py-1.5 rounded-xl border border-rose-900/50 bg-rose-950/30 hover:bg-rose-950/60 text-xs text-rose-300 font-medium transition"
+                  >
+                    ✕ Clear File
+                  </button>
+                </div>
+              </div>
+
+              {/* COLUMN OVERRIDE CONTROLS (Expandable) */}
+              {showOverrides && (
+                <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 space-y-3 animate-fadeIn">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-amber-400">
+                      Smart Column Auto-Detection & Custom Overrides
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      Change dropdowns if your Excel uses different column headers
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 text-xs">
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Date Column *</label>
+                      <select
+                        value={colMapping.dateCol}
+                        onChange={(e) => setColMapping({ ...colMapping, dateCol: parseInt(e.target.value) })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"
+                      >
+                        <option value={-1}>-- Unmapped --</option>
+                        {parsedData.headers.map((h, i) => (
+                          <option key={i} value={i}>{i}: {h || `Col ${i + 1}`}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Vehicle / Truck No *</label>
+                      <select
+                        value={colMapping.truckCol}
+                        onChange={(e) => setColMapping({ ...colMapping, truckCol: parseInt(e.target.value) })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"
+                      >
+                        <option value={-1}>-- Unmapped --</option>
+                        {parsedData.headers.map((h, i) => (
+                          <option key={i} value={i}>{i}: {h || `Col ${i + 1}`}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Amount (Rs.) *</label>
+                      <select
+                        value={colMapping.amountCol}
+                        onChange={(e) => setColMapping({ ...colMapping, amountCol: parseInt(e.target.value) })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"
+                      >
+                        <option value={-1}>-- Unmapped --</option>
+                        {parsedData.headers.map((h, i) => (
+                          <option key={i} value={i}>{i}: {h || `Col ${i + 1}`}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Transaction ID</label>
+                      <select
+                        value={colMapping.txnIdCol}
+                        onChange={(e) => setColMapping({ ...colMapping, txnIdCol: parseInt(e.target.value) })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"
+                      >
+                        <option value={-1}>-- None --</option>
+                        {parsedData.headers.map((h, i) => (
+                          <option key={i} value={i}>{i}: {h || `Col ${i + 1}`}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Quantity (Litres)</label>
+                      <select
+                        value={colMapping.litresCol}
+                        onChange={(e) => setColMapping({ ...colMapping, litresCol: parseInt(e.target.value) })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"
+                      >
+                        <option value={-1}>-- None --</option>
+                        {parsedData.headers.map((h, i) => (
+                          <option key={i} value={i}>{i}: {h || `Col ${i + 1}`}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Rate / Litre</label>
+                      <select
+                        value={colMapping.rateCol}
+                        onChange={(e) => setColMapping({ ...colMapping, rateCol: parseInt(e.target.value) })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"
+                      >
+                        <option value={-1}>-- None --</option>
+                        {parsedData.headers.map((h, i) => (
+                          <option key={i} value={i}>{i}: {h || `Col ${i + 1}`}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Retail Outlet / Station</label>
+                      <select
+                        value={colMapping.stationCol}
+                        onChange={(e) => setColMapping({ ...colMapping, stationCol: parseInt(e.target.value) })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"
+                      >
+                        <option value={-1}>-- None --</option>
+                        {parsedData.headers.map((h, i) => (
+                          <option key={i} value={i}>{i}: {h || `Col ${i + 1}`}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Credit / Debit Type</label>
+                      <select
+                        value={colMapping.typeCol}
+                        onChange={(e) => setColMapping({ ...colMapping, typeCol: parseInt(e.target.value) })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"
+                      >
+                        <option value={-1}>-- None --</option>
+                        {parsedData.headers.map((h, i) => (
+                          <option key={i} value={i}>{i}: {h || `Col ${i + 1}`}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* STAT SUMMARY CARDS */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-3.5">
+                  <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Total Rows</div>
+                  <div className="text-xl font-bold font-mono text-white mt-1">{parsedData.summary.totalRows}</div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">Scanned from file</div>
+                </div>
+                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-3.5">
+                  <div className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">🟢 Ready to Ingest</div>
+                  <div className="text-xl font-bold font-mono text-emerald-400 mt-1">{parsedData.summary.readyCount}</div>
+                  <div className="text-[10px] text-emerald-300 font-bold mt-0.5">{formatCurr(parsedData.summary.totalReadyAmt)}</div>
+                </div>
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3.5">
+                  <div className="text-[10px] uppercase font-bold text-amber-400 tracking-wider">⚠️ Skipped Duplicates</div>
+                  <div className="text-xl font-bold font-mono text-amber-400 mt-1">{parsedData.summary.duplicateCount}</div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">Already in database</div>
+                </div>
+                <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-3.5">
+                  <div className="text-[10px] uppercase font-bold text-rose-400 tracking-wider">❓ Unmatched / Errors</div>
+                  <div className="text-xl font-bold font-mono text-rose-400 mt-1">
+                    {parsedData.summary.unmatchedCount + parsedData.summary.reversalCount}
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">Missing in truck master</div>
+                </div>
+              </div>
+
+              {/* DEDUPLICATION NOTICE */}
+              {parsedData.summary.duplicateCount > 0 && (
+                <div className="bg-blue-950/30 border border-blue-800/50 rounded-xl p-3 flex items-center gap-3 text-xs text-blue-300">
+                  <span className="text-lg">🛡️</span>
+                  <div>
+                    <strong>Deduplication Safeguard:</strong> {parsedData.summary.duplicateCount} duplicate transactions were detected by their unique Transaction ID or Truck + Date + Amount match. They will be ignored to prevent duplicate expense calculations.
+                  </div>
+                </div>
+              )}
+
+              {/* PREVIEW TABLE (First 8 Rows) */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-slate-300">Statement Transactions Preview (Showing up to 8 rows)</span>
+                  <span className="text-slate-400 font-mono text-[11px]">
+                    {parsedData.items.length} total transactions
+                  </span>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-slate-800 max-h-72">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800 sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2.5">Status</th>
+                        <th className="px-3 py-2.5">Txn ID</th>
+                        <th className="px-3 py-2.5">Date</th>
+                        <th className="px-3 py-2.5">Truck Reg</th>
+                        <th className="px-3 py-2.5">Volume & Rate</th>
+                        <th className="px-3 py-2.5 text-right">Amount (₹)</th>
+                        <th className="px-3 py-2.5">Fuel Station</th>
+                        <th className="px-3 py-2.5">Auto Trip Link</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 bg-slate-900/60 font-mono">
+                      {parsedData.items.slice(0, 8).map((item, idx) => (
+                        <tr key={idx} className="hover:bg-slate-800/40 transition">
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            {item.status === 'READY' && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                🟢 Ready
+                              </span>
+                            )}
+                            {item.status === 'DUPLICATE' && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30" title={item.statusMsg}>
+                                ⚠️ Duplicate
+                              </span>
+                            )}
+                            {item.status === 'UNMATCHED_TRUCK' && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30" title={item.statusMsg}>
+                                ❓ Truck Not Found
+                              </span>
+                            )}
+                            {item.status === 'CREDIT_REVERSAL' && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-700 text-slate-300">
+                                ⚪ Reversal
+                              </span>
+                            )}
+                            {item.status === 'INVALID' && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-900/40 text-rose-300">
+                                ❌ Invalid
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-slate-400 text-[11px] truncate max-w-[120px]">{item.txnId || '-'}</td>
+                          <td className="px-3 py-2 text-white font-semibold">{formatDate(item.parsedDate)}</td>
+                          <td className="px-3 py-2">
+                            {item.matchedTruck ? (
+                              <span className="text-amber-400 font-bold">{item.matchedTruck.registrationNumber}</span>
+                            ) : (
+                              <span className="text-rose-400 line-through">{item.rawTruck || 'N/A'}</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-slate-300 text-[11px]">
+                            {item.litres ? `${item.litres} L` : '-'} {item.rate ? `@ ₹${item.rate}` : ''}
+                          </td>
+                          <td className="px-3 py-2 text-right font-bold text-white">
+                            {formatCurr(item.parsedAmount)}
+                          </td>
+                          <td className="px-3 py-2 text-slate-400 text-[11px] truncate max-w-[140px]" title={item.station}>
+                            {item.station || '-'}
+                          </td>
+                          <td className="px-3 py-2 text-[11px]">
+                            {item.linkedTrip ? (
+                              <span className="text-cyan-400 font-semibold" title={`Linked to Trip #${item.linkedTrip.id}`}>
+                                🔗 {item.linkedTrip.route}
+                              </span>
+                            ) : (
+                              <span className="text-slate-500">Unlinked</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* ACTION BUTTONS */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                <div className="text-xs text-slate-400">
+                  Clicking Ingest will automatically record <strong className="text-emerald-400">{parsedData.summary.readyCount} diesel expenses</strong> in your accounting ledger and cloud database.
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleClearStaged}
+                    className="px-5 py-2.5 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 font-bold transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={parsedData.summary.readyCount === 0}
+                    onClick={handleConfirmIngest}
+                    className={`px-6 py-2.5 rounded-xl font-bold text-xs shadow-lg transition flex items-center gap-2 ${
+                      parsedData.summary.readyCount > 0
+                        ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 cursor-pointer'
+                        : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                    }`}
+                  >
+                    <span>🚀 Confirm & Ingest {parsedData.summary.readyCount} Diesel Expenses</span>
+                    <span className="font-mono">({formatCurr(parsedData.summary.totalReadyAmt)})</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 3. STATEMENT UPLOAD HISTORY & AUDIT LOG */}
+          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <span>📁</span> Statement Upload History & Date Audit Log
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Tracks all processed statement files and their covered date ranges to audit continuous tracking.
+                </p>
+              </div>
+              <span className="text-xs text-slate-400 font-mono">
+                {fuelStatementLogs.length} statements logged
+              </span>
+            </div>
+
+            {fuelStatementLogs.length === 0 ? (
+              <div className="p-8 text-center border border-dashed border-slate-800 rounded-xl text-xs text-slate-500">
+                No statement upload history yet. Processed files will appear here with covered date ranges.
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-slate-800">
+                <table className="w-full text-left text-xs text-slate-300">
+                  <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800">
+                    <tr>
+                      <th className="px-3 py-2.5">Uploaded On</th>
+                      <th className="px-3 py-2.5">File Name</th>
+                      <th className="px-3 py-2.5">Date Period Covered</th>
+                      <th className="px-3 py-2.5 text-center">Imported</th>
+                      <th className="px-3 py-2.5 text-center">Duplicates Skipped</th>
+                      <th className="px-3 py-2.5 text-right">Total Amount (₹)</th>
+                      <th className="px-3 py-2.5 text-center">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 font-mono">
+                    {fuelStatementLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-slate-800/30 transition">
+                        <td className="px-3 py-2 text-slate-400 text-[11px]">
+                          {log.uploadedAt ? new Date(log.uploadedAt).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' }) : '-'}
+                        </td>
+                        <td className="px-3 py-2 text-white font-semibold flex items-center gap-1.5">
+                          <span>📊</span>
+                          <span className="truncate max-w-[180px]">{log.fileName}</span>
+                        </td>
+                        <td className="px-3 py-2 text-amber-400 font-bold">
+                          📅 {formatDate(log.periodStart)} to {formatDate(log.periodEnd)}
+                        </td>
+                        <td className="px-3 py-2 text-center text-emerald-400 font-bold">
+                          {log.importedCount}
+                        </td>
+                        <td className="px-3 py-2 text-center text-amber-400">
+                          {log.skippedDuplicates || 0}
+                        </td>
+                        <td className="px-3 py-2 text-right text-white font-bold">
+                          {formatCurr(log.totalAmount)}
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (confirm(`Remove upload log record for "${log.fileName}"? (Note: already imported expenses will remain in your ledger)`)) {
+                                deleteFuelStatementLog(log.id);
+                                notify('Statement log removed');
+                              }
+                            }}
+                            className="text-slate-500 hover:text-rose-400 text-xs px-2 py-1 transition"
+                            title="Delete log entry"
+                          >
+                            🗑️
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       );
     }
