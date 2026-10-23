@@ -2011,6 +2011,14 @@
           safeCloudExec(supabaseClient.from('expenses').upsert(dbPayloads), 'BatchStatementExpenses');
         }
       };
+      const deleteExpensesBatch = (ids) => {
+        if (!ids || ids.length === 0) return;
+        const idSet = new Set(ids);
+        setExpenses(prev => prev.filter(e => !idSet.has(e.id)));
+        if (storageMode === 'cloud' && supabaseClient && currentUser && !currentUser.isDemo) {
+          safeCloudExec(supabaseClient.from('expenses').delete().in('id', ids), 'BatchDeleteStatementExpenses');
+        }
+      };
 
       // Driver Payment Actions
       const addDriverPayment = (input) => {
@@ -2917,7 +2925,7 @@
           filteredTrips, filteredExpenses, filteredDriverPayments, filteredSettlements,
           summaryMetrics, dateFilter, setDateFilter, currency,
           addTrip, updateTrip, deleteTrip,
-          addTruckExpense, updateTruckExpense, deleteTruckExpense, addExpensesBatch,
+          addTruckExpense, updateTruckExpense, deleteTruckExpense, addExpensesBatch, deleteExpensesBatch,
           addDriverPayment, updateDriverPayment, deleteDriverPayment,
           addSettlement, updateSettlement, deleteSettlement,
           fuelStatementLogs: scopedFuelStatementLogs, addFuelStatementLog, deleteFuelStatementLog,
@@ -6644,7 +6652,7 @@
       const {
         trucks, trips, expenses, activeProfile,
         fuelStatementLogs, addFuelStatementLog, deleteFuelStatementLog,
-        addExpensesBatch
+        addExpensesBatch, deleteExpensesBatch
       } = useFleet();
 
       const [isDragging, setIsDragging] = useState(false);
@@ -7131,29 +7139,38 @@
           return;
         }
 
-        const newExpenses = readyItems.map(item => ({
-          id: `exp-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
-          profileId: activeProfile?.id || 'prof-default',
-          truckId: item.matchedTruck.id,
-          tripId: item.linkedTrip ? item.linkedTrip.id : undefined,
-          date: item.parsedDate,
-          category: 'DIESEL',
-          amount: item.parsedAmount,
-          paymentMethod: 'Fuel Card (Statement)',
-          isReimbursable: false,
-          notes: `Fuel Statement Import - ${item.station ? item.station + ', ' : ''}${item.city ? item.city + ' | ' : ''}${item.litres ? item.litres + ' Ltrs @ ₹' + item.rate + '/L | ' : ''}[txn:${item.txnId || 'N/A'}]`
-        }));
+        const statementId = `stmt-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        const newExpenseIds = [];
+
+        const newExpenses = readyItems.map(item => {
+          const expId = `exp-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+          newExpenseIds.push(expId);
+          return {
+            id: expId,
+            profileId: activeProfile?.id || 'prof-default',
+            truckId: item.matchedTruck.id,
+            tripId: item.linkedTrip ? item.linkedTrip.id : undefined,
+            date: item.parsedDate,
+            category: 'DIESEL',
+            amount: item.parsedAmount,
+            paymentMethod: 'Fuel Card (Statement)',
+            isReimbursable: false,
+            notes: `Fuel Statement Import - ${item.station ? item.station + ', ' : ''}${item.city ? item.city + ' | ' : ''}${item.litres ? item.litres + ' Ltrs @ ₹' + item.rate + '/L | ' : ''}[txn:${item.txnId || 'N/A'}] [stmt:${statementId}]`
+          };
+        });
 
         addExpensesBatch(newExpenses);
 
-        const logEntry = addFuelStatementLog({
+        addFuelStatementLog({
+          id: statementId,
           fileName: fileName || 'Statement.xlsx',
           periodStart: parsedData.summary.periodStart || new Date().toISOString().split('T')[0],
           periodEnd: parsedData.summary.periodEnd || new Date().toISOString().split('T')[0],
           totalRows: parsedData.summary.totalRows,
           importedCount: readyItems.length,
           skippedDuplicates: parsedData.summary.duplicateCount,
-          totalAmount: parsedData.summary.totalReadyAmt
+          totalAmount: parsedData.summary.totalReadyAmt,
+          expenseIds: newExpenseIds
         });
 
         setImportSuccess({
@@ -7168,6 +7185,36 @@
         notify(`🎉 Ingested ${readyItems.length} fuel transactions totaling ${formatCurr(parsedData.summary.totalReadyAmt)}!`);
         setRawRows([]);
         setFileName('');
+      };
+
+      // Rollback & Delete Statement & Associated Expenses
+      const handleDeleteLog = (log) => {
+        const count = log.importedCount || (log.expenseIds ? log.expenseIds.length : 0);
+        const choice = window.confirm(
+          `Delete Statement "${log.fileName}"?\n\n` +
+          `Do you want to REMOVE all ${count} imported fuel expense transactions from your ledger/reports?\n\n` +
+          `• Click OK to completely ROLLBACK & DELETE both the log entry AND all its transactions.\n` +
+          `• Click Cancel to keep everything.`
+        );
+        if (!choice) return;
+
+        let idsToDelete = Array.isArray(log.expenseIds) && log.expenseIds.length > 0 ? [...log.expenseIds] : [];
+
+        // Also check by [stmt:id] or fallback period match if uploaded earlier
+        const matchingByStmt = expenses.filter(e => {
+          if (e.notes && e.notes.includes(`[stmt:${log.id}]`)) return true;
+          if (idsToDelete.includes(e.id)) return true;
+          if (!log.expenseIds && e.category === 'DIESEL' && e.notes && e.notes.includes('Fuel Statement Import') && e.date >= log.periodStart && e.date <= log.periodEnd) return true;
+          return false;
+        }).map(e => e.id);
+
+        const allIds = Array.from(new Set([...idsToDelete, ...matchingByStmt]));
+
+        if (allIds.length > 0) {
+          deleteExpensesBatch(allIds);
+        }
+        deleteFuelStatementLog(log.id);
+        notify(`Statement and ${allIds.length} fuel transactions were deleted from your ledger.`);
       };
 
       const handleClearStaged = () => {
@@ -7685,14 +7732,9 @@
                         <td className="px-3 py-2 text-center">
                           <button
                             type="button"
-                            onClick={() => {
-                              if (confirm(`Remove upload log record for "${log.fileName}"? (Note: already imported expenses will remain in your ledger)`)) {
-                                deleteFuelStatementLog(log.id);
-                                notify('Statement log removed');
-                              }
-                            }}
+                            onClick={() => handleDeleteLog(log)}
                             className="text-slate-500 hover:text-rose-400 text-xs px-2 py-1 transition"
-                            title="Delete log entry"
+                            title="Rollback statement & delete imported expenses"
                           >
                             🗑️
                           </button>
