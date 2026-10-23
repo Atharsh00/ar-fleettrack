@@ -2459,9 +2459,13 @@
           const todayIso = new Date().toISOString().split('T')[0];
           const actualDate = (txnDate && txnDate <= todayIso) ? txnDate : (mail.date || todayIso);
 
-          // Extract Transaction ID / Reference No / URN using word boundaries so "Reference" is not cut into "Ref" + "erence"
-          const txnIdMatch = fullText.match(/\b(?:Txn(?:\s*ID|\s*No|\s*Ref)?|Transaction\s*ID|Ref(?:\s*No|\s*Number)?|URN)\b\s*[:\-#]?\s*([A-Za-z0-9_-]{6,35})/i);
-          const txnId = txnIdMatch ? txnIdMatch[1].trim() : null;
+          // Extract Transaction ID / Reference No / URN
+          const txnIdMatch = fullText.match(/\b(?:txn\s*number|transaction\s*(?:id|number|ref)|reference\s*(?:number|id|no)|urn|rrn)\b\s*[:\-#=]?\s*([A-Za-z0-9_-]{6,35})/i) ||
+                             fullText.match(/\b(?:txn(?:\s*id|\s*no)?|ref(?:\s*no)?)\b\s*[:\-#=]?\s*([A-Za-z0-9_-]{6,35})/i);
+          const rawTxn = txnIdMatch ? txnIdMatch[1].trim() : null;
+          const invalidTxnWords = ['kvbfastag', 'fastag', 'success', 'receipt', 'alert', 'transaction', 'payment', 'debited', 'account', 'customer', 'number'];
+          const isValidTxnId = rawTxn && !invalidTxnWords.includes(rawTxn.toLowerCase()) && /\d{2,}/.test(rawTxn);
+          const cleanTxnId = isValidTxnId ? rawTxn : null;
 
           // Extract Plaza or Fuel Station name
           const plazaMatch = fullText.match(/(?:at|plaza)\s+([A-Za-z0-9\s\-]{3,35}?)(?:\s+(?:toll\s*plaza|toll|plaza|pump|station))/i)
@@ -2474,20 +2478,17 @@
           const deterministicId = mail.id ? `exp-gmail-${mail.id}` : `exp-auto-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
           const curExpenses = expensesRef?.current || expenses || [];
 
-          // Duplicate Guard: check existing ledger and newly parsed batch
+          // Duplicate Guard:
+          // Check if exact same Gmail email ID already logged, or genuinely unique transaction ID already logged
           const isDuplicate = curExpenses.some(e => {
             if (e.id === deterministicId) return true;
             if (mail.id && (e.sourceEmailId === mail.id || (e.notes && e.notes.includes(mail.id)))) return true;
-            if (mail.id === '1a14ebf6759b8d0a') return true;
-            if (txnId && e.notes && e.notes.includes(`[txn:${txnId}]`)) return true;
-            if (e.truckId === targetTruckId && Number(e.amount) === Number(amount) && e.category === category && (e.date === actualDate || (mail.date && e.date === mail.date))) return true;
+            if (cleanTxnId && e.notes && e.notes.includes(`[txn:${cleanTxnId}]`)) return true;
             return false;
           }) || newExpensesCreated.some(e => {
             if (e.id === deterministicId) return true;
             if (mail.id && (e.sourceEmailId === mail.id || (e.notes && e.notes.includes(mail.id)))) return true;
-            if (mail.id === '1a14ebf6759b8d0a') return true;
-            if (txnId && e.notes && e.notes.includes(`[txn:${txnId}]`)) return true;
-            if (e.truckId === targetTruckId && Number(e.amount) === Number(amount) && e.category === category && (e.date === actualDate || (mail.date && e.date === mail.date))) return true;
+            if (cleanTxnId && e.notes && e.notes.includes(`[txn:${cleanTxnId}]`)) return true;
             return false;
           });
 
@@ -2501,7 +2502,7 @@
             category === 'TOLL' ? `FASTag Toll - ${targetTruckReg}` : `Diesel Fuel - ${targetTruckReg}`
           ];
           if (plazaName) noteParts.push(`at ${plazaName}`);
-          if (txnId) noteParts.push(`[txn:${txnId}]`);
+          if (cleanTxnId) noteParts.push(`[txn:${cleanTxnId}]`);
           if (mail.id) noteParts.push(`[ref:${mail.id}]`);
           const fullNote = noteParts.join(' ');
 
@@ -2623,8 +2624,10 @@
         const listData = await listRes.json();
         const allFound = listData.messages || [];
 
-        // Track already processed IDs in localStorage to avoid duplicates
-        const processedSet = new Set(JSON.parse(localStorage.getItem('fleet_processed_gmail_msg_ids') || '[]'));
+        // Track already processed IDs in localStorage to avoid duplicates (bypassed on Force Re-Scan)
+        const processedSet = isForceScan
+          ? new Set()
+          : new Set(JSON.parse(localStorage.getItem('fleet_processed_gmail_msg_ids') || '[]'));
 
         // Safety Reconcile: If an email already exists in the expenses ledger, skip it permanently
         const activeExpList = expensesRef?.current || expenses || [];
@@ -4030,7 +4033,7 @@
         e.preventDefault();
         if (target.type === 'TRIP') {
           const rentNum = parseFloat(totalRent);
-          if (!rentNum || rentNum <= 0) return alert('Enter valid gross rent');
+          if (isNaN(rentNum) || rentNum < 0) return alert('Enter valid gross rent (0 or greater)');
           updateTrip(target.data.id, {
             date: tripDate,
             truckId: tripTruck,
@@ -4143,7 +4146,7 @@
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div>
                       <label className="block text-xs font-semibold text-slate-300 mb-1">Gross Rent (₹)</label>
-                      <input type="number" required min="1" value={totalRent} onChange={(e) => setTotalRent(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono font-bold" />
+                      <input type="number" required min="0" value={totalRent} onChange={(e) => setTotalRent(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono font-bold" />
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-slate-300 mb-1">Commission (₹)</label>
@@ -6260,7 +6263,7 @@
       const [drops, setDrops] = useState([]);
       const [tRent, setTRent] = useState('');
       const [tComm, setTComm] = useState('0');
-      const [isTds, setIsTds] = useState(true);
+      const [isTds, setIsTds] = useState(false);
       const [tAdv, setTAdv] = useState('');
       const [tManualSalary, setTManualSalary] = useState('');
       const [tNotes, setTNotes] = useState('');
@@ -6282,7 +6285,7 @@
 
       const handleTripSubmit = (e) => {
         e.preventDefault();
-        if (grossNum <= 0) return alert('Rent must be greater than 0');
+        if (grossNum < 0) return alert('Rent cannot be negative');
         if (!tComp) return alert('Please select a client company from Master');
         if (!tDriver) return alert('Please select a driver from Master');
         if (!fromLoc.trim() || !toLoc.trim()) return alert('From and To locations are required');
@@ -6299,7 +6302,7 @@
         });
 
         notify(`Trip saved! Net Rent: ${formatCurr(netRent)}, Driver Salary: ${formatCurr(driverSalary)}, Company Balance Due: ${formatCurr(balancePending)}`);
-        setTRent(''); setTComm('0'); setTAdv(''); setTManualSalary(''); setFromLoc(''); setToLoc(''); setDrops([]); setTNotes('');
+        setTRent(''); setTComm('0'); setTAdv(''); setTManualSalary(''); setFromLoc(''); setToLoc(''); setDrops([]); setTNotes(''); setIsTds(false);
       };
 
       // Expense
@@ -6460,7 +6463,7 @@
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Agreed Gross Rent (₹) *</label>
-                  <input type="number" required min="1" placeholder="50000" value={tRent} onChange={(e) => setTRent(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono font-bold" />
+                  <input type="number" required min="0" placeholder="0" value={tRent} onChange={(e) => setTRent(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono font-bold" />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Commission Amount (₹)</label>
