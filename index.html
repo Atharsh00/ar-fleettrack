@@ -4100,7 +4100,7 @@
       const [expTripId, setExpTripId] = useState(target.data.tripId || '');
       const [expCat, setExpCat] = useState(target.data.category || 'DIESEL');
       const [expAmt, setExpAmt] = useState(target.data.amount?.toString() || '');
-      const [expMethod, setExpMethod] = useState(target.data.paymentMethod || 'Fleet Card');
+      const [expMethod, setExpMethod] = useState((target.data.paymentMethod && target.data.paymentMethod !== 'Fleet Card') ? target.data.paymentMethod : '');
       const [expNotes, setExpNotes] = useState(target.data.notes || '');
       const [expReimbursable, setExpReimbursable] = useState(target.data.isReimbursable || false);
       const [showAllEditTripsExp, setShowAllEditTripsExp] = useState(false);
@@ -4167,7 +4167,7 @@
             tripId: expTripId || undefined,
             category: expCat,
             amount: amt,
-            paymentMethod: expMethod,
+            paymentMethod: expMethod || undefined,
             notes: expNotes.trim(),
             isReimbursable: expReimbursable,
           });
@@ -4747,7 +4747,7 @@
                 date: e.date || t.date || '-',
                 source: 'Reimbursable Expense',
                 details: `Truck: ${getTruckReg ? getTruckReg(e.truckId || t.truckId) : (e.truckId || t.truckId)} | Category: ${e.category} | ${e.notes || 'Incurred on behalf of client'}`,
-                method: e.paymentMethod || 'Paid on Client Behalf',
+                method: (e.paymentMethod && e.paymentMethod !== 'Fleet Card') ? e.paymentMethod : 'Direct Bill',
                 ref: `TRIP-${t.id ? t.id.slice(-6) : '-'}`,
                 amount: eAmt,
                 isReimbursableBill: true,
@@ -4768,7 +4768,7 @@
                 date: p.date || t.date || '-',
                 source: 'Reimbursable Driver Claim',
                 details: `Truck: ${getTruckReg ? getTruckReg(p.truckId || t.truckId) : (p.truckId || t.truckId)} | Driver: ${p.driverName} | ${p.description || 'Roadside claim incurred on behalf of client'}`,
-                method: p.paymentMethod || 'Paid on Client Behalf',
+                method: (p.paymentMethod && p.paymentMethod !== 'Fleet Card') ? p.paymentMethod : 'Driver Cash',
                 ref: `TRIP-${t.id ? t.id.slice(-6) : '-'}`,
                 amount: pAmt,
                 isReimbursableBill: true,
@@ -4945,7 +4945,7 @@
           date: settleDate || new Date().toISOString().split('T')[0],
           companyName: settleModal.cmp.name,
           amount: amt,
-          paymentMethod: settleMethod,
+          paymentMethod: settleMethod || 'Bank Transfer',
           referenceNumber: settleRef || '',
           notes: settleNotes || 'Payment received from client',
         });
@@ -5066,7 +5066,6 @@
                         <th className="p-2 text-right">Commission</th>
                         <th className="p-2 text-right">TDS (1%)</th>
                         <th className="p-2 text-right">Reimbursable</th>
-                        <th className="p-2 text-right">Advance</th>
                         <th className="p-2 text-right">Balance Due</th>
                         <th className="p-2 text-center">Action</th>
                       </tr>
@@ -5078,7 +5077,6 @@
                         <th className="p-1"><ColFilterInput value={deepColFilters.comm} onChange={v => setDeepColFilters({...deepColFilters, comm: v})} placeholder="Comm..." className="text-right" /></th>
                         <th className="p-1"><ColFilterInput value={deepColFilters.tds} onChange={v => setDeepColFilters({...deepColFilters, tds: v})} placeholder="TDS..." className="text-right" /></th>
                         <th className="p-1"><ColFilterInput value={deepColFilters.reimb} onChange={v => setDeepColFilters({...deepColFilters, reimb: v})} placeholder="Reimb..." className="text-right" /></th>
-                        <th className="p-1"><ColFilterInput value={deepColFilters.adv} onChange={v => setDeepColFilters({...deepColFilters, adv: v})} placeholder="Advance..." className="text-right" /></th>
                         <th className="p-1"><ColFilterInput value={deepColFilters.bal} onChange={v => setDeepColFilters({...deepColFilters, bal: v})} placeholder="Due..." className="text-right" /></th>
                         <th className="p-1 text-center">
                           {hasDeepFilters && (
@@ -5100,7 +5098,6 @@
                             <td className="p-2 text-right font-mono text-rose-400">{formatCurr(t.commissionAmount || 0)}</td>
                             <td className="p-2 text-right font-mono text-blue-400">{formatCurr(t.tdsAmount || 0)}</td>
                             <td className="p-2 text-right font-mono text-amber-300 font-bold">{trReimb > 0 ? `+${formatCurr(trReimb)}` : '-'}</td>
-                            <td className="p-2 text-right font-mono text-emerald-400">{formatCurr(t.advanceReceived)}</td>
                             <td className="p-2 text-right font-mono text-amber-400 font-bold">{formatCurr(trBal)}</td>
                             <td className="p-2 text-center whitespace-nowrap">
                               <div className="flex items-center justify-center gap-2">
@@ -5133,9 +5130,6 @@
                         </td>
                         <td className="p-2.5 text-right font-mono text-amber-300">
                           +{formatCurr(deepTotalReimb)}
-                        </td>
-                        <td className="p-2.5 text-right font-mono text-emerald-400">
-                          -{formatCurr(deepTotalAdv)}
                         </td>
                         <td className="p-2.5 text-right font-mono text-amber-400 font-extrabold">
                           {formatCurr(deepTotalBal)}
@@ -5279,11 +5273,8 @@
                         </tbody>
                         <tfoot className="bg-slate-950 font-bold border-t-2 border-slate-700 text-white">
                           <tr>
-                            <td colSpan={5} className="p-2.5 uppercase tracking-wider text-emerald-400 font-extrabold text-[11px]">
+                            <td colSpan={6} className="p-2.5 uppercase tracking-wider text-emerald-400 font-extrabold text-[11px]">
                               Total Receipts & Reimbursable Records ({filteredDeepPayments.length} Records)
-                            </td>
-                            <td className="p-2.5 text-right font-mono text-emerald-400 font-extrabold text-sm">
-                              +{formatCurr(deepTotalPaymentsReceived)}
                             </td>
                             <td className="p-2.5 text-right font-mono text-amber-400 font-extrabold text-sm whitespace-nowrap">
                               Due: {formatCurr(deepDiveCmp.balanceDue)}
@@ -5311,20 +5302,9 @@
                   <h3 className="text-base font-bold text-white mb-1">Record Payment Received from Client</h3>
                 <p className="text-xs text-amber-400 mb-4">{settleModal.cmp.name} (Outstanding Due: {formatCurr(settleModal.balanceDue)})</p>
                 <form onSubmit={handleSettleSubmit} className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-300 mb-1">Receipt Date *</label>
-                      <input type="date" required value={settleDate} onChange={(e) => setSettleDate(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-300 mb-1">Payment Method</label>
-                      <select value={settleMethod} onChange={(e) => setSettleMethod(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white">
-                        <option value="NEFT">Bank Transfer (NEFT/RTGS)</option>
-                        <option value="Cheque">Cheque</option>
-                        <option value="UPI">UPI</option>
-                        <option value="Cash">Cash Handover</option>
-                      </select>
-                    </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Receipt Date *</label>
+                    <input type="date" required value={settleDate} onChange={(e) => setSettleDate(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white" />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-300 mb-1">Amount Received (₹) *</label>
@@ -6193,10 +6173,13 @@
         filteredExpenses.forEach(e => {
           const trk = trucks.find(x => x.id === e.truckId);
           const autoEntry = isAutoExpenseRecord(e);
+          const cleanMethod = (e.paymentMethod && e.paymentMethod !== 'Fleet Card') ? e.paymentMethod : '';
+          const cleanNotes = (e.notes || '').trim();
+          const details = cleanMethod && cleanNotes ? `${cleanMethod} • ${cleanNotes}` : (cleanMethod || cleanNotes || '-');
           list.push({
             id: e.id, type: 'EXPENSE', date: e.date, entity: trk ? trk.registrationNumber : e.truckId,
             title: `Expense: ${e.category}`, amount: e.amount,
-            details: `${e.paymentMethod} • ${e.notes || ''}`,
+            details,
             rawObj: e,
             isAutomated: autoEntry
           });
@@ -6542,7 +6525,7 @@
       const [eTripId, setETripId] = useState('');
       const [eCat, setECat] = useState('DIESEL');
       const [eAmt, setEAmt] = useState('');
-      const [eMethod, setEMethod] = useState('Fleet Card');
+      const [eMethod, setEMethod] = useState('');
       const [eNotes, setENotes] = useState('');
       const [eReimbursable, setEReimbursable] = useState(false);
       const [showAllTripsExpense, setShowAllTripsExpense] = useState(false);
@@ -6567,7 +6550,7 @@
           tripId: eTripId || undefined,
           category: eCat,
           amount: amt,
-          paymentMethod: eMethod,
+          paymentMethod: eMethod || undefined,
           notes: eNotes,
           isReimbursable: eReimbursable
         });
@@ -10829,6 +10812,13 @@
       const [clearActionType, setClearActionType] = useState('ledgers'); // 'ledgers' | 'masters' | 'account'
       const [clearWipeMasters, setClearWipeMasters] = useState(false);
       const [clearConfirmed, setClearConfirmed] = useState(false);
+
+      // Auto-scroll to top whenever switching tabs (ensures mobile viewport starts at top of page)
+      useEffect(() => {
+        window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+        if (document.documentElement) document.documentElement.scrollTop = 0;
+        if (document.body) document.body.scrollTop = 0;
+      }, [activeTab]);
 
       // Authentication Gate: Render AuthScreen if user is not signed in
       if (!currentUser) {
