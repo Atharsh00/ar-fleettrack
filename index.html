@@ -3119,7 +3119,7 @@
 
     // --- COMPONENT: STICKY DATE FILTER ---
     function DateFilter() {
-      const { dateFilter, setDateFilter, setShowExportModal } = useFleet();
+      const { dateFilter, setDateFilter, emailSyncStatus, authorizeGoogle } = useFleet();
       const handlePreset = (preset) => {
         if (preset === 'custom') {
           const today = new Date().toISOString().split('T')[0];
@@ -3168,15 +3168,17 @@
                   />
                 </div>
               )}
-              <button
-                type="button"
-                onClick={() => setShowExportModal(true)}
-                className="ml-auto sm:ml-2 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-950/30"
-                title="Export database records to Excel-friendly CSV with custom time filter & bifurcations"
-              >
-                <span>📥</span>
-                <span>Export CSV</span>
-              </button>
+              {emailSyncStatus === 'expired' && (
+                <button
+                  type="button"
+                  onClick={() => authorizeGoogle()}
+                  className="ml-auto sm:ml-2 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 shadow-md animate-pulse"
+                  title="Google session expired - Click to 1-click re-authorize"
+                >
+                  <span>⚠️</span>
+                  <span>Session Expired (Re-Auth)</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -3185,8 +3187,28 @@
 
     // --- TAB 1: HOME PAGE (ONLY 4 TOP SUMMARY BUTTONS/CARDS) ---
     function HomeTab() {
+      const { emailSyncStatus, authorizeGoogle } = useFleet();
       return (
-        <div className="space-y-6">
+        <div className="space-y-4 sm:space-y-6">
+          {emailSyncStatus === 'expired' && (
+            <div className="bg-amber-500/10 border-2 border-amber-500/40 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg animate-pulse">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">⚠️</span>
+                <div>
+                  <h4 className="text-xs sm:text-sm font-bold text-amber-300">Google Sync Session Expired</h4>
+                  <p className="text-[11px] sm:text-xs text-slate-300">Your session has expired. Re-authenticate to keep fuel and FASTag expenses auto-syncing seamlessly.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => authorizeGoogle()}
+                className="w-full sm:w-auto px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shadow-md shrink-0 flex items-center justify-center gap-1.5"
+              >
+                <span>🔑</span>
+                <span>Session Expired (Re-Auth)</span>
+              </button>
+            </div>
+          )}
           <SummaryCards />
         </div>
       );
@@ -10740,6 +10762,17 @@
                     Demo
                   </span>
                 )}
+                {emailSyncStatus === 'expired' && (
+                  <button
+                    type="button"
+                    onClick={() => authorizeGoogle()}
+                    title="Google session expired - Click to 1-click re-authorize"
+                    className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 font-bold text-[11px] flex items-center gap-1 animate-pulse"
+                  >
+                    <span>⚠️</span>
+                    <span>Re-Auth</span>
+                  </button>
+                )}
                 {/* Active Entity Pill Button (taps to open drawer menu) */}
                 <button
                   type="button"
@@ -10902,8 +10935,8 @@
               </div>
             )}
 
-            {/* 4 Summary Cards: Positioned directly below the tabs on Home Tab */}
-            {activeTab === 'home' && <SummaryCards />}
+            {/* Home Tab: Includes Session Expired Re-Auth banner when active and Summary Cards */}
+            {activeTab === 'home' && <HomeTab />}
 
             {/* Tab Views */}
             <div className="animate-fadeIn">
@@ -11310,7 +11343,7 @@
               </span>
             </button>
 
-            {/* Accounts */}
+            {/* Company */}
             <button
               onClick={() => { setActiveTab('company_accounts'); setMobileDrawerOpen(false); }}
               className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
@@ -11318,20 +11351,18 @@
               }`}
             >
               <span className="text-lg">🏢</span>
-              <span className="text-[10px] mt-0.5 tracking-tight">Accounts</span>
+              <span className="text-[10px] mt-0.5 tracking-tight">Company</span>
             </button>
 
-            {/* More */}
+            {/* Drivers */}
             <button
-              onClick={() => setMobileDrawerOpen(prev => !prev)}
+              onClick={() => { setActiveTab('driver_ledger'); setMobileDrawerOpen(false); }}
               className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
-                ['driver_ledger', 'tds_ledger', 'universal_ledger', 'masters'].includes(activeTab) || mobileDrawerOpen
-                  ? 'text-amber-400 font-black'
-                  : 'text-slate-400 hover:text-slate-200'
+                activeTab === 'driver_ledger' ? 'text-amber-400 font-black' : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <span className="text-lg">{mobileDrawerOpen ? '✕' : '☰'}</span>
-              <span className="text-[10px] mt-0.5 tracking-tight">More</span>
+              <span className="text-lg">👨‍✈️</span>
+              <span className="text-[10px] mt-0.5 tracking-tight">Drivers</span>
             </button>
           </nav>
 
