@@ -1905,6 +1905,73 @@
       };
 
       // Trip Actions
+      const isAutoExpenseRecord = (exp) => Boolean(
+        exp && (
+          exp.sourceEmailId ||
+          (exp.id && (exp.id.startsWith('exp-gmail-') || exp.id.startsWith('exp-auto-') || exp.id.startsWith('exp-stmt-'))) ||
+          (exp.paymentMethod && exp.paymentMethod.includes('Auto-Email')) ||
+          (exp.notes && (exp.notes.includes('[Automated') || exp.notes.includes('[ref:') || exp.notes.includes('[txn:')))
+        )
+      );
+
+      // Find the active ongoing trip for a truck on an expense date:
+      // Any fuel or FASTag expense from the start of a trip up until the start date of the NEXT trip belongs to that trip.
+      const findOngoingTripForTruck = (truckId, expenseDate, customTrips = null) => {
+        if (!truckId || !expenseDate) return null;
+        const tripSource = customTrips || scopedTrips;
+        const truckTrips = tripSource.filter(t => t.truckId === truckId && t.date && (t.profileId ? t.profileId === activeProfileId : true));
+        if (truckTrips.length === 0) return null;
+        const sorted = [...truckTrips].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        return sorted.find(t => t.date <= expenseDate) || null;
+      };
+
+      // Automatically re-evaluate and retag automated toll and diesel expenses to their correct chronological trip
+      const autoRetagExpensesForTruck = (truckId, updatedTrips) => {
+        if (!truckId) return;
+        setExpenses(prevExpenses => {
+          let updatedCount = 0;
+          const nextExpenses = prevExpenses.map(exp => {
+            if (exp.truckId !== truckId) return exp;
+            if (exp.profileId && exp.profileId !== activeProfileId) return exp;
+            if (!isAutoExpenseRecord(exp)) return exp; // Leave manual user entries intact
+
+            const matchedTrip = findOngoingTripForTruck(truckId, exp.date, updatedTrips);
+            const targetTripId = matchedTrip ? matchedTrip.id : null;
+            if (exp.tripId !== targetTripId) {
+              updatedCount++;
+              return { ...exp, tripId: targetTripId };
+            }
+            return exp;
+          });
+
+          if (updatedCount > 0) {
+            try { localStorage.setItem(`${STORAGE_KEY}_expenses`, JSON.stringify(nextExpenses)); } catch(e){}
+            if (supabaseClient) {
+              const changedList = nextExpenses.filter(e => {
+                const old = prevExpenses.find(o => o.id === e.id);
+                return old && old.tripId !== e.tripId;
+              });
+              const payloads = changedList.map(e => ({
+                id: e.id,
+                profile_id: e.profileId,
+                truck_id: e.truckId,
+                trip_id: e.tripId || null,
+                date: e.date,
+                category: e.category,
+                amount: Number(e.amount) || 0,
+                payment_method: e.paymentMethod,
+                is_reimbursable: Boolean(e.isReimbursable),
+                notes: e.notes || '',
+                is_simulation: false
+              }));
+              safeCloudExec(supabaseClient.from('expenses').upsert(payloads), 'AutoRetagExpenses');
+            }
+            return nextExpenses;
+          }
+          return prevExpenses;
+        });
+      };
+
       const addTrip = (input) => {
         const recAmt = Number(input.receivedAmount || 0);
         const salInput = input.driverCommission !== undefined ? input.driverCommission : input.manualDriverSalary;
@@ -1947,7 +2014,10 @@
           isSimulation: Boolean(input.isSimulation)
         };
 
-        setTrips(prev => [newTrip, ...prev]);
+        const nextTrips = [newTrip, ...trips];
+        setTrips(nextTrips);
+        autoRetagExpensesForTruck(newTrip.truckId, nextTrips);
+
         if (storageMode === 'cloud' && supabaseClient) {
           safeCloudExec(supabaseClient.from('trips').upsert(toSnakeObj(newTrip)), 'InsertTrip');
         }
@@ -1955,27 +2025,49 @@
       };
 
       const updateTrip = (id, updates) => {
+        const targetOld = trips.find(t => t.id === id);
+        const oldTruckId = targetOld?.truckId;
         let updatedItem = null;
-        setTrips(prev => prev.map(t => {
-          if (t.id !== id) return t;
-          const merged = { ...t, ...updates };
-          const recAmt = Number(merged.receivedAmount || 0);
-          const salInput = updates.driverCommission !== undefined ? updates.driverCommission : (activeRules?.autoDriverSalaryEnabled !== false ? undefined : merged.driverCommission);
-          const { tdsAmount, netRent, driverCommission, balancePending } = computeTripFields(
-            merged.totalRent, merged.commissionAmount, merged.isTdsDeducted, merged.advanceReceived, recAmt, salInput
-          );
-          const drops = (merged.additionalDrops || []).filter(Boolean);
-          const route = [merged.fromLocation, ...drops, merged.toLocation].filter(Boolean).join(' -> ');
-          updatedItem = { ...merged, route: route || merged.route, receivedAmount: recAmt, tdsAmount, netRent, driverCommission, balancePending };
-          return updatedItem;
-        }));
+        let nextTrips = trips;
+
+        setTrips(prev => {
+          nextTrips = prev.map(t => {
+            if (t.id !== id) return t;
+            const merged = { ...t, ...updates };
+            const recAmt = Number(merged.receivedAmount || 0);
+            const salInput = updates.driverCommission !== undefined ? updates.driverCommission : (activeRules?.autoDriverSalaryEnabled !== false ? undefined : merged.driverCommission);
+            const { tdsAmount, netRent, driverCommission, balancePending } = computeTripFields(
+              merged.totalRent, merged.commissionAmount, merged.isTdsDeducted, merged.advanceReceived, recAmt, salInput
+            );
+            const drops = (merged.additionalDrops || []).filter(Boolean);
+            const route = [merged.fromLocation, ...drops, merged.toLocation].filter(Boolean).join(' -> ');
+            updatedItem = { ...merged, route: route || merged.route, receivedAmount: recAmt, tdsAmount, netRent, driverCommission, balancePending };
+            return updatedItem;
+          });
+          return nextTrips;
+        });
+
+        if (updatedItem) {
+          autoRetagExpensesForTruck(updatedItem.truckId, nextTrips);
+          if (oldTruckId && oldTruckId !== updatedItem.truckId) {
+            autoRetagExpensesForTruck(oldTruckId, nextTrips);
+          }
+        }
+
         if (storageMode === 'cloud' && supabaseClient && updatedItem) {
           safeCloudExec(supabaseClient.from('trips').update(toSnakeObj(updatedItem)).eq('id', id), 'UpdateTrip');
         }
       };
 
       const deleteTrip = (id) => {
-        setTrips(prev => prev.filter(t => t.id !== id));
+        const targetTrip = trips.find(t => t.id === id);
+        const nextTrips = trips.filter(t => t.id !== id);
+        setTrips(nextTrips);
+
+        if (targetTrip?.truckId) {
+          autoRetagExpensesForTruck(targetTrip.truckId, nextTrips);
+        }
+
         if (storageMode === 'cloud' && supabaseClient) {
           safeCloudExec(supabaseClient.from('trips').delete().eq('id', id), 'DeleteTrip');
         }
@@ -2261,27 +2353,19 @@
         return Number(trip.totalRent || 0) - (directOperationalExp + drvSal + comm + tds);
       };
 
-      // Find the active ongoing trip for a truck on an expense date:
-      // Any fuel or FASTag expense from the start of a trip up until the start date of the NEXT trip belongs to that trip.
-      const findOngoingTripForTruck = (truckId, expenseDate) => {
-        if (!truckId || !expenseDate) return null;
-        const truckTrips = scopedTrips.filter(t => t.truckId === truckId && t.date);
-        if (truckTrips.length === 0) return null;
-        // scopedTrips is already sorted descending by date!
-        return truckTrips.find(t => t.date <= expenseDate) || null;
-      };
-
-      // Relink any currently unlinked fuel/fastag expenses in ledger based on their date window
+      // Relink any currently unlinked or misaligned fuel/fastag expenses in ledger based on their date window
       const relinkUnlinkedExpensesToTrips = () => {
         let updatedCount = 0;
         const updatedList = expenses.map(exp => {
           if (exp.profileId !== activeProfileId) return exp;
-          if (exp.tripId || !exp.truckId || !exp.date) return exp;
-          if (exp.category === 'DIESEL' || exp.category === 'TOLL') {
+          if (!exp.truckId || !exp.date) return exp;
+          if (!isAutoExpenseRecord(exp) && exp.tripId) return exp;
+          if (exp.category === 'DIESEL' || exp.category === 'TOLL' || isAutoExpenseRecord(exp)) {
             const matchedTrip = findOngoingTripForTruck(exp.truckId, exp.date);
-            if (matchedTrip) {
+            const targetTripId = matchedTrip ? matchedTrip.id : null;
+            if (exp.tripId !== targetTripId) {
               updatedCount++;
-              return { ...exp, tripId: matchedTrip.id };
+              return { ...exp, tripId: targetTripId };
             }
           }
           return exp;
@@ -2291,12 +2375,15 @@
           setExpenses(updatedList);
           try { localStorage.setItem(`${STORAGE_KEY}_expenses`, JSON.stringify(updatedList)); } catch(e){}
           if (supabaseClient) {
-            const newlyLinked = updatedList.filter(e => e.tripId && !expenses.find(old => old.id === e.id && old.tripId));
+            const newlyLinked = updatedList.filter(e => {
+              const old = expenses.find(o => o.id === e.id);
+              return old && old.tripId !== e.tripId;
+            });
             const payloads = newlyLinked.map(e => ({
               id: e.id,
               profile_id: e.profileId,
               truck_id: e.truckId,
-              trip_id: e.tripId,
+              trip_id: e.tripId || null,
               date: e.date,
               category: e.category,
               amount: Number(e.amount) || 0,
@@ -6090,6 +6177,7 @@
       const [searchTerm, setSearchTerm] = useState('');
       const [editTarget, setEditTarget] = useState(null);
       const [colFilters, setColFilters] = useState({});
+      const [showAutomated, setShowAutomated] = useState(false);
 
       const unified = useMemo(() => {
         const list = [];
@@ -6098,16 +6186,19 @@
             id: t.id, type: 'TRIP', date: t.date, entity: t.companyName,
             title: `Trip: ${t.route}`, amount: t.totalRent,
             details: `Net: ${formatCurr(t.netRent)} | Salary: ${formatCurr(t.driverCommission)} | Due: ${formatCurr(t.balancePending)}`,
-            rawObj: t
+            rawObj: t,
+            isAutomated: false
           });
         });
         filteredExpenses.forEach(e => {
           const trk = trucks.find(x => x.id === e.truckId);
+          const autoEntry = isAutoExpenseRecord(e);
           list.push({
             id: e.id, type: 'EXPENSE', date: e.date, entity: trk ? trk.registrationNumber : e.truckId,
             title: `Expense: ${e.category}`, amount: e.amount,
             details: `${e.paymentMethod} • ${e.notes || ''}`,
-            rawObj: e
+            rawObj: e,
+            isAutomated: autoEntry
           });
         });
         filteredDriverPayments.forEach(p => {
@@ -6123,7 +6214,8 @@
             id: p.id, type: 'DRIVER_PAY', date: p.date, entity: p.driverName,
             title,
             amount: p.amount, details: cleanDesc || (isOpeningBal ? 'Prior Balance Adjustment' : p.description),
-            rawObj: p
+            rawObj: p,
+            isAutomated: false
           });
         });
         filteredSettlements.forEach(s => {
@@ -6138,13 +6230,17 @@
           list.push({
             id: s.id, type: 'SETTLEMENT', date: s.date, entity: s.companyName,
             title, amount: s.amount, details: cleanNotes || (isOpeningBal ? 'Prior Balance Adjustment' : (s.referenceNumber || s.notes || '')),
-            rawObj: s
+            rawObj: s,
+            isAutomated: false
           });
         });
         return list.sort(compareRecordsDesc);
       }, [filteredTrips, filteredExpenses, filteredDriverPayments, filteredSettlements, trucks]);
 
+      const autoCount = useMemo(() => unified.filter(item => item.isAutomated).length, [unified]);
+
       const filtered = unified.filter(item => {
+        if (!showAutomated && item.isAutomated) return false;
         if (typeFilter !== 'ALL' && item.type !== typeFilter) return false;
         if (searchTerm.trim()) {
           const q = searchTerm.toLowerCase();
@@ -6185,7 +6281,26 @@
               </h2>
               <p className="text-xs text-slate-400">Master chronological log with search, filter, and Delete/Edit actions</p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Toggle switch for automated email entries */}
+              <label className="flex items-center gap-2 cursor-pointer select-none px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 hover:border-slate-600 transition">
+                <input
+                  type="checkbox"
+                  checked={showAutomated}
+                  onChange={(e) => setShowAutomated(e.target.checked)}
+                  className="rounded text-amber-500 bg-slate-900 border-slate-700 cursor-pointer w-4 h-4 accent-amber-500"
+                />
+                <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                  <span>🤖</span>
+                  <span>Show Automated Tolls</span>
+                  {autoCount > 0 && (
+                    <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${showAutomated ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-700 text-slate-400'}`}>
+                      {autoCount}
+                    </span>
+                  )}
+                </span>
+              </label>
+
               <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white">
                 <option value="ALL">All Types</option>
                 <option value="TRIP">Trips</option>
@@ -6203,6 +6318,23 @@
             </div>
           </div>
 
+          {!showAutomated && autoCount > 0 && (
+            <div className="bg-slate-900/60 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-slate-400">
+              <span className="flex items-center gap-2">
+                <span>🛡️</span>
+                <span><strong>{autoCount} automated toll/fuel entries</strong> hidden to keep ledger clean.</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowAutomated(true)}
+                className="text-amber-400 hover:text-amber-300 hover:underline font-bold text-xs flex items-center gap-1"
+              >
+                <span>Show Tolls</span>
+                <span>👁️</span>
+              </button>
+            </div>
+          )}
+
           {/* Mobile Card Feed (Visible on phones < md) */}
           <div className="md:hidden space-y-3">
             {displayedItems.length === 0 ? (
@@ -6214,9 +6346,16 @@
                 <div key={`m-${item.type}-${item.id}`} className="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 shadow space-y-2">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-mono text-slate-400 text-[11px]">{formatDate(item.date)}</span>
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-amber-300 border border-slate-700">
-                      {item.type}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {item.isAutomated && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                          🤖 Auto
+                        </span>
+                      )}
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-amber-300 border border-slate-700">
+                        {item.type}
+                      </span>
+                    </div>
                   </div>
                   <div className="flex items-start justify-between gap-2">
                     <div>
@@ -6290,7 +6429,14 @@
                     <tr key={`${item.type}-${item.id}`} className="hover:bg-slate-800/40">
                       <td className="py-3 px-3 font-mono text-slate-400 whitespace-nowrap">{formatDate(item.date)}</td>
                       <td className="py-3 px-3">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300">{item.type}</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300">{item.type}</span>
+                          {item.isAutomated && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                              🤖 Auto
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3 px-3 font-semibold text-white">{item.entity}</td>
                       <td className="py-3 px-3 text-slate-200">{item.title}</td>
