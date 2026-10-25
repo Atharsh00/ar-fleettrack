@@ -15,6 +15,17 @@
   <!-- Web App Manifest -->
   <link rel="manifest" href="/manifest.json" />
 
+  <!-- Service Worker Registration for Android PWA Install Support -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() {
+        navigator.serviceWorker.register('/sw.js').catch(function(err) {
+          console.debug('ServiceWorker registration note:', err);
+        });
+      });
+    }
+  </script>
+
   <!-- Favicon & Home Screen Shortcut Icons -->
   <link rel="icon" type="image/svg+xml" href="/ar-logo.svg" />
   <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
@@ -3107,12 +3118,13 @@
       };
 
       return (
-        <div className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur border-b border-slate-800 px-4 py-3 shadow-md mb-6">
-          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-slate-300 text-xs font-bold uppercase tracking-wider">
-              <span className="text-amber-500">📅</span> Date Range Filter:
+        <div className="sticky top-0 z-20 bg-slate-900/95 backdrop-blur border-b border-slate-800 px-3 sm:px-4 py-2 sm:py-2.5 shadow-md mb-4 sm:mb-6">
+          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 sm:gap-3">
+            <div className="flex items-center gap-1.5 text-slate-300 text-xs font-bold uppercase tracking-wider">
+              <span className="text-amber-500">📅</span>
+              <span className="hidden sm:inline">Date Range</span> Filter:
             </div>
-            <div className="flex items-center flex-wrap gap-2">
+            <div className="flex items-center flex-wrap gap-1.5 sm:gap-2">
               {['all', 'this_month', 'last_month', 'custom'].map((p) => {
                 const label = p === 'all' ? 'All Time' : p === 'this_month' ? 'This Month' : p === 'last_month' ? 'Last Month' : 'Custom Range';
                 const active = dateFilter.preset === p;
@@ -3120,33 +3132,33 @@
                   <button
                     key={p}
                     onClick={() => handlePreset(p)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${active ? 'bg-amber-500 text-slate-950 font-bold shadow-md' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                    className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition ${active ? 'bg-amber-500 text-slate-950 font-bold shadow-md' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
                   >
                     {label}
                   </button>
                 );
               })}
               {dateFilter.preset === 'custom' && (
-                <div className="flex items-center gap-2 bg-slate-950/80 border border-slate-700 rounded-lg px-2.5 py-1 ml-1">
+                <div className="flex items-center gap-1.5 bg-slate-950/80 border border-slate-700 rounded-lg px-2 py-1">
                   <input
                     type="date"
                     value={dateFilter.startDate}
                     onChange={(e) => setDateFilter({ ...dateFilter, startDate: e.target.value })}
-                    className="bg-transparent text-xs text-slate-200 focus:outline-none [color-scheme:dark]"
+                    className="bg-transparent text-xs text-slate-200 focus:outline-none [color-scheme:dark] max-w-[115px]"
                   />
-                  <span className="text-slate-500 text-xs">to</span>
+                  <span className="text-slate-500 text-[10px]">to</span>
                   <input
                     type="date"
                     value={dateFilter.endDate}
                     onChange={(e) => setDateFilter({ ...dateFilter, endDate: e.target.value })}
-                    className="bg-transparent text-xs text-slate-200 focus:outline-none [color-scheme:dark]"
+                    className="bg-transparent text-xs text-slate-200 focus:outline-none [color-scheme:dark] max-w-[115px]"
                   />
                 </div>
               )}
               <button
                 type="button"
                 onClick={() => setShowExportModal(true)}
-                className="ml-auto sm:ml-2 flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-950/30"
+                className="ml-auto sm:ml-2 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-950/30"
                 title="Export database records to Excel-friendly CSV with custom time filter & bifurcations"
               >
                 <span>📥</span>
@@ -3248,8 +3260,8 @@
       ].sort(compareRecordsDesc);
 
       return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-4xl shadow-2xl p-6 max-h-[90vh] flex flex-col">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/85 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full max-w-4xl shadow-2xl p-4 sm:p-6 max-h-[92vh] flex flex-col">
             <div className="flex justify-between items-start pb-4 border-b border-slate-800">
               <div>
                 <div className="flex items-center gap-2">
@@ -4094,8 +4106,8 @@
       };
 
       return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full max-w-lg shadow-2xl p-4 sm:p-6 max-h-[92vh] overflow-y-auto">
             <div className="flex justify-between items-center pb-3 border-b border-slate-800 mb-4">
               <h3 className="text-base font-bold text-white">Edit Record ({target.type})</h3>
               <button onClick={onClose} className="text-slate-400 hover:text-white text-lg">✕</button>
@@ -6171,7 +6183,60 @@
             </div>
           </div>
 
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-lg overflow-x-auto">
+          {/* Mobile Card Feed (Visible on phones < md) */}
+          <div className="md:hidden space-y-3">
+            {displayedItems.length === 0 ? (
+              <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 text-center text-slate-500 text-xs">
+                No records match the active filters.
+              </div>
+            ) : (
+              displayedItems.map(item => (
+                <div key={`m-${item.type}-${item.id}`} className="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 shadow space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-mono text-slate-400 text-[11px]">{formatDate(item.date)}</span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-amber-300 border border-slate-700">
+                      {item.type}
+                    </span>
+                  </div>
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-bold text-white text-sm">{item.entity}</div>
+                      <div className="text-xs text-slate-300 mt-0.5">{item.title}</div>
+                      {item.details && <div className="text-[11px] text-slate-400 mt-1 leading-snug">{item.details}</div>}
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm font-black font-mono text-white">{formatCurr(item.amount)}</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                    <button
+                      onClick={() => setEditTarget({ type: item.type, data: item.rawObj })}
+                      className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 text-xs font-bold transition flex items-center gap-1"
+                    >
+                      <span>✏️</span>
+                      <span>Edit</span>
+                    </button>
+                    <button
+                      onClick={() => handleDelete(item)}
+                      className="px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-600 text-rose-300 hover:text-white text-xs font-bold transition flex items-center gap-1"
+                    >
+                      <span>🗑️</span>
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+            {displayedItems.length > 0 && (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex justify-between items-center text-xs font-bold">
+                <span className="text-amber-400 uppercase">Total ({displayedItems.length} Records)</span>
+                <span className="font-mono text-white font-black text-sm">{formatCurr(univTotalAmount)}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Desktop Table View (Visible on md and up >= 768px) */}
+          <div className="hidden md:block bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-lg overflow-x-auto">
             <table className="w-full text-left text-xs text-slate-300">
               <thead className="bg-slate-800/80 text-[10px] uppercase text-slate-400">
                 <tr>
@@ -6383,17 +6448,17 @@
         <div className="space-y-6">
           {msg && <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold animate-fadeIn">✅ {msg}</div>}
 
-          <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-3">
+          <div className="flex flex-nowrap overflow-x-auto no-scrollbar sm:flex-wrap gap-2 border-b border-slate-800 pb-3">
             {[
-              { id: 'trip', label: '1. Trip & Freight Entry' },
-              { id: 'expense', label: '2. Truck Expense Entry' },
-              { id: 'driver', label: '3. Driver Payout & Claims' },
-              { id: 'fuel_statement', label: '4. 📊 Excel Fuel Statement Import' },
+              { id: 'trip', label: '1. Trip & Freight' },
+              { id: 'expense', label: '2. Truck Expense' },
+              { id: 'driver', label: '3. Driver Payout/Claim' },
+              { id: 'fuel_statement', label: '4. 📊 Excel Import' },
             ].map(f => (
               <button
                 key={f.id}
                 onClick={() => setFormType(f.id)}
-                className={`px-4 py-2.5 rounded-xl text-xs font-bold transition ${formType === f.id ? 'bg-amber-500 text-slate-950 shadow-md' : 'bg-slate-800 text-slate-300'}`}
+                className={`flex-shrink-0 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition whitespace-nowrap ${formType === f.id ? 'bg-amber-500 text-slate-950 shadow-md' : 'bg-slate-800 text-slate-300'}`}
               >
                 {f.label}
               </button>
@@ -10572,7 +10637,7 @@
     // --- MAIN APP COMPONENT ---
     function App() {
       const {
-        currentUser, logout, profiles, activeProfileId, setActiveProfileId,
+        currentUser, logout, profiles, activeProfileId, activeProfile, setActiveProfileId,
         addProfile, updateProfile, deleteProfile, clearAllUserData, deleteAccount,
         storageMode, setStorageMode, cloudSyncStatus,
         showExportModal, setShowExportModal,
@@ -10580,6 +10645,7 @@
         showChangePassModal, setShowChangePassModal
       } = useFleet();
       const [activeTab, setActiveTab] = useState('home');
+      const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
       const [showSettingsModal, setShowSettingsModal] = useState(false);
       const [showClearModal, setShowClearModal] = useState(false);
       const [clearActionType, setClearActionType] = useState('ledgers'); // 'ledgers' | 'masters' | 'account'
@@ -10605,28 +10671,58 @@
       return (
         <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
           {/* Header with Profile Switcher, User Details & Logout */}
-          <header className="bg-slate-900 border-b border-slate-800">
-            <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap justify-between items-center gap-3">
-              <div className="flex items-center gap-3.5 cursor-pointer group" onClick={() => setActiveTab('home')}>
-                <ARLogo className="w-11 h-11 transition-transform group-hover:scale-105 duration-200" />
+          <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-30">
+            <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2.5 sm:py-3 flex justify-between items-center gap-2">
+              {/* Brand Logo & Title */}
+              <div className="flex items-center gap-2.5 sm:gap-3.5 cursor-pointer group" onClick={() => { setActiveTab('home'); setMobileDrawerOpen(false); }}>
+                <ARLogo className="w-9 h-9 sm:w-11 sm:h-11 transition-transform group-hover:scale-105 duration-200" />
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 sm:gap-2">
                     <div className="flex items-baseline tracking-wider uppercase font-black">
-                      <span className="text-2xl text-amber-400 mr-1.5 drop-shadow-[0_2px_8px_rgba(245,158,11,0.4)]">
+                      <span className="text-xl sm:text-2xl text-amber-400 mr-1 drop-shadow-[0_2px_8px_rgba(245,158,11,0.4)]">
                         AR
                       </span>
-                      <span className="text-lg tracking-wider text-white group-hover:text-amber-400 transition-colors">
+                      <span className="text-base sm:text-lg tracking-wider text-white group-hover:text-amber-400 transition-colors">
                         FLEETTRACK
                       </span>
                     </div>
-                    <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">Multi-Entity</span>
+                    <span className="hidden sm:inline-block text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">Multi-Entity</span>
                   </div>
                   <p className="text-xs text-slate-400 hidden sm:block">Fleet Expense & Revenue Management System (₹ INR)</p>
                 </div>
               </div>
 
-              {/* Settings & Logout */}
-              <div className="flex items-center gap-2 sm:gap-3">
+              {/* Mobile Header Actions (Visible on phones < md) */}
+              <div className="flex md:hidden items-center gap-2">
+                {currentUser?.isDemo && (
+                  <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-[10px]">
+                    Demo
+                  </span>
+                )}
+                {/* Active Entity Pill Button (taps to open drawer menu) */}
+                <button
+                  type="button"
+                  onClick={() => setMobileDrawerOpen(true)}
+                  className="px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 font-bold text-[11px] flex items-center gap-1 max-w-[120px] truncate"
+                  title="Switch Entity or Open Menu"
+                >
+                  <span className="text-amber-400">🏢</span>
+                  <span className="truncate">{activeProfile?.name || 'Entity'}</span>
+                </button>
+                {/* Mobile Menu Hamburger Button */}
+                <button
+                  type="button"
+                  onClick={() => setMobileDrawerOpen(prev => !prev)}
+                  className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 font-bold text-base shadow-sm transition flex items-center justify-center w-8 h-8"
+                  title="Toggle Navigation Menu"
+                  aria-label="Toggle Menu"
+                >
+                  {mobileDrawerOpen ? '✕' : '☰'}
+                </button>
+              </div>
+
+              {/* Desktop Header Actions (Visible on md and up >= 768px) */}
+              <div className="hidden md:flex items-center gap-2 sm:gap-3">
                 {currentUser?.isDemo && (
                   <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold shadow-sm">
                     <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
@@ -10729,9 +10825,9 @@
           <DateFilter />
 
           {/* Main Layout Container */}
-          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pb-10">
-            {/* Navigation Tab Bar: Placed at the top so tabs are always accessible first */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mb-6">
+          <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 pb-28 md:pb-10">
+            {/* Desktop Navigation Tab Bar: Visible on md and up, hidden on mobile */}
+            <div className="hidden md:grid grid-cols-4 lg:grid-cols-8 gap-2 mb-6">
               {tabs.map(t => (
                 <button
                   key={t.id}
@@ -10743,6 +10839,27 @@
                   }`}
                 >
                   <span className="text-sm">{t.icon}</span>
+                  <span className="truncate">{t.label}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Mobile Active Section Sub-Banner (Shown only when activeTab is not home on mobile) */}
+            {activeTab !== 'home' && (
+              <div className="md:hidden flex items-center justify-between bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-2 mb-3 shadow-sm">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">{tabs.find(t => t.id === activeTab)?.icon}</span>
+                  <span className="text-xs font-black text-amber-400">{tabs.find(t => t.id === activeTab)?.label}</span>
+                </div>
+                <button
+                  onClick={() => setMobileDrawerOpen(true)}
+                  className="text-[11px] text-slate-400 hover:text-slate-200 font-semibold flex items-center gap-1"
+                >
+                  <span>Switch Tab</span>
+                  <span>▼</span>
+                </button>
+              </div>
+            )}
                   <span className="truncate">{t.label}</span>
                 </button>
               ))}
@@ -10937,7 +11054,247 @@
           {showChangePassModal && <ChangePasswordModal onClose={() => setShowChangePassModal(false)} />}
           {showExportModal && <ExportDataModal onClose={() => setShowExportModal(false)} />}
 
-          <footer className="bg-slate-900 border-t border-slate-800/80 py-4 text-center text-xs text-slate-500">
+          {/* Android Mobile Slide-Over Drawer */}
+          {mobileDrawerOpen && (
+            <div className="fixed inset-0 z-50 md:hidden flex justify-end animate-fadeIn">
+              {/* Backdrop */}
+              <div
+                className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm transition-opacity"
+                onClick={() => setMobileDrawerOpen(false)}
+              />
+
+              {/* Drawer Panel */}
+              <div className="relative w-4/5 max-w-xs bg-slate-900 border-l border-slate-800 h-full flex flex-col z-10 shadow-2xl overflow-y-auto">
+                {/* Drawer Header */}
+                <div className="p-4 border-b border-slate-800 bg-slate-950/70 flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <ARLogo className="w-8 h-8" />
+                    <div>
+                      <div className="text-sm font-black text-white">AR FLEETTRACK</div>
+                      <div className="text-[10px] text-amber-400 truncate max-w-[150px]">
+                        {activeProfile?.name || currentUser?.businessName || currentUser?.username}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setMobileDrawerOpen(false)}
+                    className="text-slate-400 hover:text-white p-1 text-lg rounded-lg leading-none"
+                    title="Close Menu"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Entity Switcher (when multiple profiles exist) */}
+                {profiles && profiles.length > 1 && (
+                  <div className="p-3 bg-slate-800/40 border-b border-slate-800">
+                    <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">🏢 Active Entity</label>
+                    <select
+                      value={activeProfileId}
+                      onChange={(e) => setActiveProfileId(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-bold"
+                    >
+                      {profiles.map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} {p.id === activeProfileId ? '✓' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* Navigation Modules */}
+                <div className="flex-1 p-3 space-y-1">
+                  <div className="text-[10px] uppercase font-bold text-slate-500 px-3 py-1">Fleet Modules</div>
+                  {tabs.map(t => (
+                    <button
+                      key={t.id}
+                      onClick={() => {
+                        setActiveTab(t.id);
+                        setMobileDrawerOpen(false);
+                      }}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
+                        activeTab === t.id
+                          ? 'bg-amber-500 text-slate-950 font-black shadow-md'
+                          : 'text-slate-300 hover:bg-slate-800'
+                      }`}
+                    >
+                      <span className="text-base">{t.icon}</span>
+                      <span>{t.label}</span>
+                    </button>
+                  ))}
+
+                  <div className="pt-3 pb-1 border-t border-slate-800 text-[10px] uppercase font-bold text-slate-500 px-3">
+                    Tools & Account
+                  </div>
+
+                  {/* Gmail Auto-Sync status & trigger */}
+                  {emailSyncStatus === 'active' && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setMobileDrawerOpen(false);
+                        if (googleToken && !isSyncingGmail) {
+                          try { await syncFromLiveGmail(googleToken); } catch(e) {}
+                        }
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/20"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span>Gmail Auto-Sync</span>
+                      </span>
+                      <span className="text-[10px] font-bold">{isSyncingGmail ? 'Syncing...' : 'Scan Now'}</span>
+                    </button>
+                  )}
+                  {emailSyncStatus === 'expired' && (
+                    <button
+                      type="button"
+                      onClick={() => { setMobileDrawerOpen(false); authorizeGoogle(); }}
+                      className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 animate-pulse"
+                    >
+                      <span>⚠️ Session Expired</span>
+                      <span className="text-[10px] font-bold">Re-Auth</span>
+                    </button>
+                  )}
+                  {emailSyncStatus === 'disconnected' && (
+                    <button
+                      type="button"
+                      onClick={() => { setMobileDrawerOpen(false); authorizeGoogle(); }}
+                      className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs text-blue-300 bg-blue-500/10 border border-blue-500/20"
+                    >
+                      <span>✉️</span>
+                      <span>Connect Gmail</span>
+                    </button>
+                  )}
+
+                  {/* CSV Export */}
+                  <button
+                    onClick={() => { setMobileDrawerOpen(false); setShowExportModal(true); }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800"
+                  >
+                    <span>📥</span>
+                    <span>Export Records (CSV)</span>
+                  </button>
+
+                  {/* Settings */}
+                  <button
+                    onClick={() => { setMobileDrawerOpen(false); setShowSettingsModal(true); }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-amber-400 hover:bg-slate-800"
+                  >
+                    <span>⚙️</span>
+                    <span>Settings & Preferences</span>
+                  </button>
+
+                  {/* Change Password */}
+                  <button
+                    onClick={() => { setMobileDrawerOpen(false); setShowChangePassModal(true); }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800"
+                  >
+                    <span>🔑</span>
+                    <span>Change Password</span>
+                  </button>
+
+                  {/* Clear Data */}
+                  <button
+                    onClick={() => {
+                      setMobileDrawerOpen(false);
+                      setClearActionType('ledgers');
+                      setClearWipeMasters(false);
+                      setClearConfirmed(false);
+                      setShowClearModal(true);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-rose-400 hover:bg-rose-950/30"
+                  >
+                    <span>⚠️</span>
+                    <span>Clear Data / Erasure</span>
+                  </button>
+                </div>
+
+                {/* Drawer Footer / Logout */}
+                <div className="p-3 border-t border-slate-800 bg-slate-950/70">
+                  <button
+                    onClick={() => { setMobileDrawerOpen(false); logout(); }}
+                    className="w-full py-2.5 rounded-xl bg-rose-950/50 hover:bg-rose-900/70 text-rose-300 border border-rose-800/50 font-bold text-xs flex items-center justify-center gap-2"
+                  >
+                    <span>🚪</span>
+                    <span>Sign Out ({currentUser?.username})</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Android Mobile Bottom Navigation Bar */}
+          <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 flex items-center justify-around py-1.5 px-1 shadow-[0_-4px_25px_rgba(0,0,0,0.6)]">
+            {/* Home */}
+            <button
+              onClick={() => { setActiveTab('home'); setMobileDrawerOpen(false); }}
+              className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
+                activeTab === 'home' ? 'text-amber-400 font-black' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <span className="text-lg">🏠</span>
+              <span className="text-[10px] mt-0.5 tracking-tight">Home</span>
+            </button>
+
+            {/* Trucks */}
+            <button
+              onClick={() => { setActiveTab('truck_performance'); setMobileDrawerOpen(false); }}
+              className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
+                activeTab === 'truck_performance' ? 'text-amber-400 font-black' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <span className="text-lg">🚛</span>
+              <span className="text-[10px] mt-0.5 tracking-tight">Trucks</span>
+            </button>
+
+            {/* Entry (Prominent Android Action Button) */}
+            <button
+              onClick={() => { setActiveTab('data_entry'); setMobileDrawerOpen(false); }}
+              className={`flex flex-col items-center justify-center -mt-5 transition ${
+                activeTab === 'data_entry' ? 'transform scale-105' : 'hover:scale-105'
+              }`}
+              title="Data Entry Portal"
+            >
+              <div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg border-2 ${
+                activeTab === 'data_entry'
+                  ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-amber-500/50 ring-4 ring-amber-500/20'
+                  : 'bg-amber-500 text-slate-950 border-amber-400 shadow-amber-500/30'
+              }`}>
+                <span className="text-2xl font-black leading-none">＋</span>
+              </div>
+              <span className={`text-[10px] mt-0.5 font-bold ${activeTab === 'data_entry' ? 'text-amber-400 font-black' : 'text-slate-300'}`}>
+                Entry
+              </span>
+            </button>
+
+            {/* Accounts */}
+            <button
+              onClick={() => { setActiveTab('company_accounts'); setMobileDrawerOpen(false); }}
+              className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
+                activeTab === 'company_accounts' ? 'text-amber-400 font-black' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <span className="text-lg">🏢</span>
+              <span className="text-[10px] mt-0.5 tracking-tight">Accounts</span>
+            </button>
+
+            {/* More */}
+            <button
+              onClick={() => setMobileDrawerOpen(prev => !prev)}
+              className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
+                ['driver_ledger', 'tds_ledger', 'universal_ledger', 'masters'].includes(activeTab) || mobileDrawerOpen
+                  ? 'text-amber-400 font-black'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <span className="text-lg">{mobileDrawerOpen ? '✕' : '☰'}</span>
+              <span className="text-[10px] mt-0.5 tracking-tight">More</span>
+            </button>
+          </nav>
+
+          <footer className="hidden md:block bg-slate-900 border-t border-slate-800/80 py-4 text-center text-xs text-slate-500">
             <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-3">
                 <span>AR FleetTrack &copy; 2026 Multi-Entity Operations</span>
