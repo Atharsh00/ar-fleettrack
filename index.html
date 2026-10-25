@@ -459,6 +459,15 @@
       return str;
     };
 
+    const isAutoExpenseRecord = (exp) => Boolean(
+      exp && (
+        exp.sourceEmailId ||
+        (exp.id && (exp.id.startsWith('exp-gmail-') || exp.id.startsWith('exp-auto-') || exp.id.startsWith('exp-stmt-'))) ||
+        (exp.paymentMethod && exp.paymentMethod.includes('Auto-Email')) ||
+        (exp.notes && (exp.notes.includes('[Automated') || exp.notes.includes('[ref:') || exp.notes.includes('[txn:')))
+      )
+    );
+
     function FleetProvider({ children }) {
       const STORAGE_KEY = 'fleettrack_v4';
 
@@ -1905,15 +1914,6 @@
       };
 
       // Trip Actions
-      const isAutoExpenseRecord = (exp) => Boolean(
-        exp && (
-          exp.sourceEmailId ||
-          (exp.id && (exp.id.startsWith('exp-gmail-') || exp.id.startsWith('exp-auto-') || exp.id.startsWith('exp-stmt-'))) ||
-          (exp.paymentMethod && exp.paymentMethod.includes('Auto-Email')) ||
-          (exp.notes && (exp.notes.includes('[Automated') || exp.notes.includes('[ref:') || exp.notes.includes('[txn:')))
-        )
-      );
-
       // Find the active ongoing trip for a truck on an expense date:
       // Any fuel or FASTag expense from the start of a trip up until the start date of the NEXT trip belongs to that trip.
       const findOngoingTripForTruck = (truckId, expenseDate, customTrips = null) => {
