@@ -2,11 +2,35 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>AR Insights | Route, Toll & Fuel Telemetry</title>
 
-  <!-- Favicon -->
+  <!-- Mobile & PWA Configuration (Ensures Standalone App Appearance) -->
+  <meta name="theme-color" content="#F8FAFC" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="AR Insights" />
+  <link rel="manifest" href="/manifest.json" />
+
+  <!-- Favicons & Touch Icons -->
   <link rel="icon" type="image/svg+xml" href="/ar-logo.svg" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+  <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+
+  <!-- Service Worker Registration for PWA Standalone Mode -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() {
+        navigator.serviceWorker.register('/sw.js').catch(function(err) {
+          console.debug('ServiceWorker note:', err);
+        });
+      });
+    }
+  </script>
 
   <!-- Google Fonts: Plus Jakarta Sans & JetBrains Mono -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -742,8 +766,31 @@
 
       // --- RELIABLE LEAFLET MAP ENGINE (ESRI TILES - ZERO 403 BLOCKS) ---
       useEffect(() => {
-        if (selTripId === 'all' || !mapContainerRef.current) {
+        // If on ongoing trip (no map) or all trips summary, cleanly remove existing map
+        if (selTripId === 'all' || activeTripStatus.isLatest || !mapContainerRef.current) {
+          if (mapInstanceRef.current) {
+            try {
+              mapInstanceRef.current.remove();
+            } catch(e) {}
+            mapInstanceRef.current = null;
+            mapLayerGroupRef.current = null;
+          }
           return;
+        }
+
+        // If map exists on a detached/remounted container, remove old instance first
+        if (mapInstanceRef.current) {
+          try {
+            const curContainer = mapInstanceRef.current.getContainer();
+            if (curContainer !== mapContainerRef.current) {
+              mapInstanceRef.current.remove();
+              mapInstanceRef.current = null;
+              mapLayerGroupRef.current = null;
+            }
+          } catch(e) {
+            mapInstanceRef.current = null;
+            mapLayerGroupRef.current = null;
+          }
         }
 
         if (!mapInstanceRef.current) {
@@ -770,7 +817,7 @@
 
         // Refresh container dimensions immediately
         setTimeout(() => {
-          if (map) map.invalidateSize();
+          if (map && mapInstanceRef.current) map.invalidateSize();
         }, 120);
 
         if (!routeData || !routeData.geometry) return;
@@ -786,45 +833,76 @@
         });
         layerGroup.addLayer(routeLine);
 
-        const makePin = (label, bgClass, emoji) => L.divIcon({
-          className: 'custom-pin',
-          html: `
-            <div class="flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold text-white shadow-md border ${bgClass} whitespace-nowrap transform -translate-x-1/2 -translate-y-1/2">
-              <span>${emoji}</span>
-              <span>${label}</span>
-            </div>
-          `,
-          iconSize: [0, 0]
-        });
-
-        // 1. Origin
+        // 1. Origin (Clean Clickable Dot)
         if (routeData.waypoints[0]) {
           const o = routeData.waypoints[0];
+          const originIcon = L.divIcon({
+            className: 'custom-pin',
+            html: `
+              <div class="w-6 h-6 rounded-full bg-emerald-600 border-2 border-white flex items-center justify-center text-white text-[11px] font-bold shadow-md transform -translate-x-1/2 -translate-y-1/2 hover:scale-125 transition cursor-pointer" title="Origin: ${o.name}">
+                🟢
+              </div>
+            `,
+            iconSize: [0, 0]
+          });
           layerGroup.addLayer(
-            L.marker([o.lat, o.lng], { icon: makePin(o.name.split(',')[0], 'bg-emerald-600 border-emerald-500', '🟢') })
-              .bindPopup(`<strong>Origin:</strong> ${o.name}`)
+            L.marker([o.lat, o.lng], { icon: originIcon })
+              .bindPopup(`
+                <div class="text-xs p-1">
+                  <div class="font-bold text-emerald-700 flex items-center gap-1"><span>🟢</span> Origin Dock / Hub</div>
+                  <div class="text-slate-900 font-bold text-sm mt-0.5">${o.name}</div>
+                </div>
+              `)
           );
         }
 
-        // 2. Intermediate Drops
+        // 2. Intermediate Drops (Clean Clickable Dots)
         for (let i = 1; i < routeData.waypoints.length - 1; i++) {
           const d = routeData.waypoints[i];
+          const dropIcon = L.divIcon({
+            className: 'custom-pin',
+            html: `
+              <div class="w-6 h-6 rounded-full bg-sky-600 border-2 border-white flex items-center justify-center text-white text-[11px] font-bold shadow-md transform -translate-x-1/2 -translate-y-1/2 hover:scale-125 transition cursor-pointer" title="Drop #${i}: ${d.name}">
+                🔵
+              </div>
+            `,
+            iconSize: [0, 0]
+          });
           layerGroup.addLayer(
-            L.marker([d.lat, d.lng], { icon: makePin(d.name.split(',')[0], 'bg-sky-600 border-sky-500', '🔵') })
-              .bindPopup(`<strong>Drop:</strong> ${d.name}`)
+            L.marker([d.lat, d.lng], { icon: dropIcon })
+              .bindPopup(`
+                <div class="text-xs p-1">
+                  <div class="font-bold text-sky-700 flex items-center gap-1"><span>🔵</span> Intermediate Delivery Drop #${i}</div>
+                  <div class="text-slate-900 font-bold text-sm mt-0.5">${d.name}</div>
+                </div>
+              `)
           );
         }
 
-        // 3. Destination
+        // 3. Destination (Clean Clickable Dot)
         if (routeData.waypoints.length > 1) {
           const dest = routeData.waypoints[routeData.waypoints.length - 1];
+          const destIcon = L.divIcon({
+            className: 'custom-pin',
+            html: `
+              <div class="w-6 h-6 rounded-full bg-rose-600 border-2 border-white flex items-center justify-center text-white text-[11px] font-bold shadow-md transform -translate-x-1/2 -translate-y-1/2 hover:scale-125 transition cursor-pointer" title="Destination: ${dest.name}">
+                🔴
+              </div>
+            `,
+            iconSize: [0, 0]
+          });
           layerGroup.addLayer(
-            L.marker([dest.lat, dest.lng], { icon: makePin(dest.name.split(',')[0], 'bg-rose-600 border-rose-500', '🔴') })
-              .bindPopup(`<strong>Destination:</strong> ${dest.name}`)
+            L.marker([dest.lat, dest.lng], { icon: destIcon })
+              .bindPopup(`
+                <div class="text-xs p-1">
+                  <div class="font-bold text-rose-700 flex items-center gap-1"><span>🔴</span> Final Destination</div>
+                  <div class="text-slate-900 font-bold text-sm mt-0.5">${dest.name}</div>
+                </div>
+              `)
           );
         }
 
-        // 4. Sequential Toll Plazas & Diesel Fuel Stations along the Route
+        // 4. Sequential Toll Plazas & Diesel Fuel Stations along the Route (Dots only - details on click)
         if (routeData.geometry.coordinates && routeData.geometry.coordinates.length > 0) {
           const coords = routeData.geometry.coordinates;
           const totalPts = coords.length;
@@ -849,15 +927,11 @@
 
             if (stop.kind === 'TOLL') {
               tollCount++;
-              const cleanPlaza = (stop.location || 'Toll Plaza').replace(/Toll Plaza|Fee Plaza|Plaza/gi, '').trim();
-              const plazaDisplayName = cleanPlaza ? `${cleanPlaza} Plaza` : 'Toll Plaza';
-
               const tollIcon = L.divIcon({
                 className: 'toll-badge',
                 html: `
-                  <div class="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500 text-slate-950 font-bold text-[10px] shadow-lg border-2 border-white transform -translate-x-1/2 -translate-y-1/2 hover:scale-115 transition whitespace-nowrap cursor-pointer z-10" title="${stop.location}">
-                    <span>🛣️</span>
-                    <span>#${tollCount} ${plazaDisplayName}</span>
+                  <div class="w-6 h-6 rounded-full bg-amber-500 border-2 border-white flex items-center justify-center text-slate-950 font-black text-xs shadow-md transform -translate-x-1/2 -translate-y-1/2 hover:scale-125 transition cursor-pointer" title="${stop.location}">
+                    ${tollCount}
                   </div>
                 `,
                 iconSize: [0, 0]
@@ -866,11 +940,14 @@
               layerGroup.addLayer(
                 L.marker([pt[1], pt[0]], { icon: tollIcon })
                   .bindPopup(`
-                    <div class="text-xs space-y-1">
-                      <div class="font-bold text-amber-700 flex items-center gap-1"><span>🛣️</span> FASTag Toll Plaza #${tollCount}</div>
-                      <div class="text-slate-900 font-bold text-sm">${stop.location}</div>
-                      <div class="text-slate-700 font-mono">Deduction: <strong class="text-amber-800">${formatCurr(stop.amount)}</strong></div>
-                      <div class="text-slate-500 text-[11px]">Time: <strong>${stop.time}</strong> | Date: ${formatDate(stop.date)}</div>
+                    <div class="text-xs space-y-1.5 p-1 min-w-[190px]">
+                      <div class="flex items-center gap-1.5 font-bold text-amber-700 text-xs">
+                        <span class="w-5 h-5 rounded-md bg-amber-100 flex items-center justify-center text-[11px]">🛣️</span>
+                        <span>Toll Plaza #${tollCount}</span>
+                      </div>
+                      <div class="text-slate-900 font-extrabold text-sm leading-snug">${stop.location}</div>
+                      <div class="text-slate-600 font-mono text-xs">Deduction: <strong class="text-amber-800 font-bold">${formatCurr(stop.amount)}</strong></div>
+                      <div class="text-slate-500 text-[11px] border-t border-slate-100 pt-1">🕒 Time: <strong>${stop.time}</strong> | 📅 ${formatDate(stop.date)}</div>
                     </div>
                   `)
               );
@@ -879,15 +956,12 @@
               dieselCount++;
               const lMatch = (stop.notes || '').match(/(\d+(?:\.\d+)?)\s*(?:L|ltr|liters)/i);
               const liters = lMatch ? parseFloat(lMatch[1]) : Math.round(Number(stop.amount || 0) / 95);
-              const cleanStation = (stop.location || 'Fuel Station').replace(/Highway Fuel Station|Fuel Station|Bunk|RO\b/gi, '').trim();
-              const stationDisplayName = cleanStation ? cleanStation : 'Fuel Stop';
 
               const dieselIcon = L.divIcon({
                 className: 'diesel-badge',
                 html: `
-                  <div class="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-purple-700 text-white font-bold text-[10px] shadow-lg border-2 border-white transform -translate-x-1/2 -translate-y-1/2 hover:scale-115 transition whitespace-nowrap cursor-pointer z-10" title="${stop.location}">
-                    <span>⛽</span>
-                    <span>#${dieselCount} ${stationDisplayName} (${liters}L)</span>
+                  <div class="w-6 h-6 rounded-full bg-purple-700 border-2 border-white flex items-center justify-center text-white font-black text-[11px] shadow-md transform -translate-x-1/2 -translate-y-1/2 hover:scale-125 transition cursor-pointer" title="${stop.location}">
+                    ⛽
                   </div>
                 `,
                 iconSize: [0, 0]
@@ -896,11 +970,14 @@
               layerGroup.addLayer(
                 L.marker([pt[1], pt[0]], { icon: dieselIcon })
                   .bindPopup(`
-                    <div class="text-xs space-y-1">
-                      <div class="font-bold text-purple-700 flex items-center gap-1"><span>⛽</span> Diesel Bunk Stop #${dieselCount}</div>
-                      <div class="text-slate-900 font-bold text-sm">${stop.location}</div>
-                      <div class="text-purple-700 font-mono">Volume: <strong>${liters} Liters</strong> (${formatCurr(stop.amount)})</div>
-                      <div class="text-slate-500 text-[11px]">Time: <strong>${stop.time}</strong> | Date: ${formatDate(stop.date)}</div>
+                    <div class="text-xs space-y-1.5 p-1 min-w-[190px]">
+                      <div class="flex items-center gap-1.5 font-bold text-purple-700 text-xs">
+                        <span class="w-5 h-5 rounded-md bg-purple-100 flex items-center justify-center text-[11px]">⛽</span>
+                        <span>Diesel Station #${dieselCount}</span>
+                      </div>
+                      <div class="text-slate-900 font-extrabold text-sm leading-snug">${stop.location}</div>
+                      <div class="text-purple-700 font-mono text-xs">Volume: <strong class="font-bold">${liters} Liters</strong> (${formatCurr(stop.amount)})</div>
+                      <div class="text-slate-500 text-[11px] border-t border-slate-100 pt-1">🕒 Time: <strong>${stop.time}</strong> | 📅 ${formatDate(stop.date)}</div>
                     </div>
                   `)
               );
@@ -909,7 +986,7 @@
         }
 
         map.fitBounds(routeLine.getBounds(), { padding: [35, 35] });
-      }, [routeData, tollEntries, dieselEntries, isMapMaximized, selTripId]);
+      }, [routeData, tollEntries, dieselEntries, isMapMaximized, selTripId, activeTripStatus.isLatest]);
 
       // Re-invalidate size whenever toggling fullscreen map
       useEffect(() => {
@@ -920,13 +997,16 @@
         }
       }, [isMapMaximized]);
 
-      // Clean up map instance when navigating to summary
+      // Clean up map instance when navigating to summary or ongoing trips
       useEffect(() => {
-        if (selTripId === 'all' && mapInstanceRef.current) {
-          mapInstanceRef.current.remove();
+        if ((selTripId === 'all' || activeTripStatus.isLatest) && mapInstanceRef.current) {
+          try {
+            mapInstanceRef.current.remove();
+          } catch(e) {}
           mapInstanceRef.current = null;
+          mapLayerGroupRef.current = null;
         }
-      }, [selTripId]);
+      }, [selTripId, activeTripStatus.isLatest]);
 
       // Metrics
       const totalTollsAmt = useMemo(() => tollEntries.reduce((s, e) => s + Number(e.amount || 0), 0), [tollEntries]);
