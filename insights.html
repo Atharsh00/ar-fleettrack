@@ -37,6 +37,9 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
+  <!-- Supabase JS Client v2 (Multi-device Cloud Sync) -->
+  <script crossorigin src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
   <style>
     /* Custom Scrollbar for Light Theme */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -237,10 +240,28 @@
       };
     };
 
+    // --- SUPABASE CLOUD DATABASE CONFIGURATION (READ-ONLY TELEMETRY) ---
+    const SUPABASE_CONFIG = {
+      url: 'https://vdmfymirrdkebnwlgnqz.supabase.co',
+      anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZkbWZ5bWlycmRrZWJud2xnbnF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIwODgzNzAsImV4cCI6MjEwNzY2NDM3MH0.smw-W0dH9SGepzySxwFG9pnaAkHnn63Z0tChcPj4BpU'
+    };
+
+    let supabaseClient = null;
+    try {
+      if (window.supabase && typeof window.supabase.createClient === 'function') {
+        supabaseClient = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
+      }
+    } catch (e) {
+      console.warn('Supabase client init note:', e);
+    }
+
     // --- MAIN APPLICATION COMPONENT ---
     function App() {
       const STORAGE_KEY = 'fleettrack_v4';
       const ROUTE_CACHE_KEY = 'fleettrack_route_cache';
+
+      // Cloud database sync status (Read-Only)
+      const [isSyncingCloud, setIsSyncingCloud] = useState(false);
 
       // Load Master Data
       const [trucks, setTrucks] = useState(() => {
@@ -377,6 +398,75 @@
       const mapContainerRef = useRef(null);
       const mapInstanceRef = useRef(null);
       const mapLayerGroupRef = useRef(null);
+
+      // --- SUPABASE CLOUD MULTI-DEVICE SYNC (READ-ONLY) ---
+      useEffect(() => {
+        if (!supabaseClient) return;
+        let isMounted = true;
+        setIsSyncingCloud(true);
+
+        const fetchCloudData = async () => {
+          try {
+            const [tRes, trRes, expRes] = await Promise.all([
+              supabaseClient.from('trucks').select('*'),
+              supabaseClient.from('trips').select('*').order('date', { ascending: false }),
+              supabaseClient.from('expenses').select('*').order('date', { ascending: false })
+            ]);
+
+            if (isMounted) {
+              if (tRes.data && tRes.data.length > 0) {
+                setTrucks(tRes.data.map(t => ({
+                  id: t.id,
+                  registrationNumber: t.registration_number || t.registrationNumber,
+                  model: t.model || ''
+                })));
+              }
+              if (trRes.data && trRes.data.length > 0) {
+                setTrips(trRes.data.map(tr => {
+                  let drops = tr.additional_drops || tr.additionalDrops;
+                  if (typeof drops === 'string') {
+                    try { drops = JSON.parse(drops); } catch(e) { drops = []; }
+                  }
+                  return {
+                    id: tr.id,
+                    truckId: tr.truck_id || tr.truckId,
+                    date: tr.date,
+                    route: tr.route || '',
+                    fromLocation: tr.from_location || tr.fromLocation || '',
+                    toLocation: tr.to_location || tr.toLocation || '',
+                    additionalDrops: Array.isArray(drops) ? drops : [],
+                    companyName: tr.company_name || tr.companyName || '',
+                    driverName: tr.driver_name || tr.driverName || '',
+                    totalRent: Number(tr.total_rent || tr.totalRent || 0)
+                  };
+                }));
+              }
+              if (expRes.data && expRes.data.length > 0) {
+                const cloudExpenses = expRes.data.map(e => ({
+                  id: e.id,
+                  date: e.date,
+                  time: e.time || '',
+                  timestamp: e.timestamp || `${e.date}T${e.time || '12:00'}:00`,
+                  truckId: e.truck_id || e.truckId,
+                  tripId: e.trip_id || e.tripId,
+                  category: e.category,
+                  amount: Number(e.amount || 0),
+                  notes: e.notes || '',
+                  location: e.location || ''
+                }));
+                setExpenses(cloudExpenses.map(enrichHistoricalExpense));
+              }
+            }
+          } catch(err) {
+            console.warn('Cloud sync notice:', err);
+          } finally {
+            if (isMounted) setIsSyncingCloud(false);
+          }
+        };
+
+        fetchCloudData();
+        return () => { isMounted = false; };
+      }, []);
 
       // Determine if a trip is completed (has a subsequent trip entered) or active/ongoing (latest trip)
       const getTripStatusInfo = (trip) => {
@@ -761,6 +851,11 @@
               </div>
 
               <div className="flex items-center gap-3">
+                <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-50 border border-slate-200 text-slate-600 text-xs font-semibold">
+                  <span className={`w-2 h-2 rounded-full ${isSyncingCloud ? 'bg-amber-400 animate-ping' : supabaseClient ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
+                  {isSyncingCloud ? 'Syncing Cloud...' : supabaseClient ? 'Supabase Synced' : 'Offline Mode'}
+                </span>
+
                 {cacheHit && (
                   <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold">
                     <span className="w-2 h-2 rounded-full bg-emerald-500"></span>

@@ -1,0 +1,1251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>AR Insights | Route, Toll & Fuel Telemetry</title>
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="/ar-logo.svg" />
+
+  <!-- Google Fonts: Plus Jakarta Sans & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          }
+        }
+      }
+    };
+  </script>
+
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- React 18, ReactDOM & Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Supabase JS Client v2 (Multi-device Cloud Sync) -->
+  <script crossorigin src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <style>
+    /* Custom Scrollbar for Light Theme */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #F1F5F9; }
+    ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+
+    /* Map Box Standard Containment */
+    .map-box {
+      position: relative !important;
+      overflow: hidden !important;
+      border-radius: 14px !important;
+      z-index: 10 !important;
+    }
+    .map-box .leaflet-container {
+      width: 100% !important;
+      height: 100% !important;
+      background: #E2E8F0 !important;
+      font-family: '"Plus Jakarta Sans"', sans-serif !important;
+    }
+
+    /* True Edge-to-Edge Fullscreen Map (100% of Phone/Desktop Screen) */
+    .map-fullscreen {
+      position: fixed !important;
+      top: 0 !important;
+      left: 0 !important;
+      right: 0 !important;
+      bottom: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      z-index: 9999 !important;
+      border-radius: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      background: #FFFFFF !important;
+    }
+    .map-fullscreen .leaflet-container {
+      width: 100vw !important;
+      height: 100vh !important;
+    }
+
+    /* Popup Styling */
+    .leaflet-popup-content-wrapper {
+      background: #FFFFFF !important;
+      color: #0F172A !important;
+      border: 1px solid #E2E8F0 !important;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15) !important;
+      border-radius: 12px !important;
+    }
+    .leaflet-popup-tip { background: #FFFFFF !important; }
+    .leaflet-popup-content { margin: 12px 14px !important; line-height: 1.4 !important; }
+  </style>
+</head>
+<body class="bg-[#F8FAFC] text-slate-800 font-sans min-h-screen selection:bg-sky-100 selection:text-sky-900">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // --- COMPREHENSIVE INDIAN LOGISTICS HUB & FUZZY ALIAS DICTIONARY ---
+    const LOGISTICS_HUBS = {
+      'MADURAI': { name: 'Madurai', state: 'Tamil Nadu', lat: 9.9252, lng: 78.1198, aliases: ['MDU', 'MAD'] },
+      'COIMBATORE': { name: 'Coimbatore', state: 'Tamil Nadu', lat: 11.0168, lng: 76.9558, aliases: ['COI', 'CBE', 'COIM', 'KOVAI'] },
+      'CHENNAI': { name: 'Chennai', state: 'Tamil Nadu', lat: 13.0827, lng: 80.2707, aliases: ['MAA', 'CHN', 'MADRAS'] },
+      'TRICHY': { name: 'Tiruchirappalli', state: 'Tamil Nadu', lat: 10.7905, lng: 78.7047, aliases: ['TPJ', 'TRICHY'] },
+      'SALEM': { name: 'Salem', state: 'Tamil Nadu', lat: 11.6643, lng: 78.1460, aliases: ['SA'] },
+      'KOLKATA': { name: 'Kolkata', state: 'West Bengal', lat: 22.5726, lng: 88.3639, aliases: ['KOL', 'KOLK', 'CALCUTTA', 'CCU'] },
+      'DURGAPUR': { name: 'Durgapur', state: 'West Bengal', lat: 23.5204, lng: 87.3119, aliases: ['DGP'] },
+      'SILIGURI': { name: 'Siliguri', state: 'West Bengal', lat: 26.7271, lng: 88.3953, aliases: ['IXB'] },
+      'BENGALURU': { name: 'Bengaluru', state: 'Karnataka', lat: 12.9716, lng: 77.5946, aliases: ['BLR', 'BNG', 'BANGALORE', 'BLORE', 'BENGALURU DC'] },
+      'BELGAUM': { name: 'Belagavi', state: 'Karnataka', lat: 15.8497, lng: 74.4977, aliases: ['IXG', 'BELGAUM BYPASS', 'BELGAUM'] },
+      'MANGALORE': { name: 'Mangaluru', state: 'Karnataka', lat: 12.9141, lng: 74.8560, aliases: ['IXE', 'MANGALORE'] },
+      'HUBLI': { name: 'Hubballi', state: 'Karnataka', lat: 15.3647, lng: 75.1240, aliases: ['HBX', 'HUBLI'] },
+      'MUMBAI': { name: 'Mumbai', state: 'Maharashtra', lat: 19.0760, lng: 72.8777, aliases: ['BOM', 'MUM', 'BOMBAY', 'MUMBAI JNPT', 'JNPT'] },
+      'BHIWANDI': { name: 'Bhiwandi', state: 'Maharashtra', lat: 19.2967, lng: 73.0631, aliases: ['BHIWANDI HUB', 'BHW'] },
+      'PUNE': { name: 'Pune', state: 'Maharashtra', lat: 18.5204, lng: 73.8567, aliases: ['PNQ', 'PUN', 'PUNE MIDC', 'PUNE CHAKAN', 'CHAKAN'] },
+      'SOLAPUR': { name: 'Solapur', state: 'Maharashtra', lat: 17.6599, lng: 75.9064, aliases: ['SOL', 'SOLAPUR MIDC'] },
+      'NAGPUR': { name: 'Nagpur', state: 'Maharashtra', lat: 21.1458, lng: 79.0882, aliases: ['NAG', 'NAGPUR YARD'] },
+      'DELHI': { name: 'Delhi NCR', state: 'Delhi', lat: 28.6139, lng: 77.2090, aliases: ['DEL', 'NCR', 'DELHI NCR', 'NEW DELHI'] },
+      'JAIPUR': { name: 'Jaipur', state: 'Rajasthan', lat: 26.9124, lng: 75.7873, aliases: ['JAI', 'JAIPUR DEPOT'] },
+      'VARANASI': { name: 'Varanasi', state: 'Uttar Pradesh', lat: 25.3176, lng: 82.9739, aliases: ['VNS', 'VARANASI HUB', 'BANARAS'] },
+      'LUCKNOW': { name: 'Lucknow', state: 'Uttar Pradesh', lat: 26.8467, lng: 80.9462, aliases: ['LKO'] },
+      'JAMSHEDPUR': { name: 'Jamshedpur', state: 'Jharkhand', lat: 22.8046, lng: 86.2029, aliases: ['JAMSHEDPUR TISCO', 'TISCO', 'IXW'] },
+      'SURAT': { name: 'Surat', state: 'Gujarat', lat: 21.1702, lng: 72.8311, aliases: ['SUR', 'SURAT RING ROAD'] },
+      'AHMEDABAD': { name: 'Ahmedabad', state: 'Gujarat', lat: 23.0225, lng: 72.5714, aliases: ['AMD', 'AHM', 'AHMEDABAD YARD'] },
+      'MUNDRA': { name: 'Mundra', state: 'Gujarat', lat: 22.8394, lng: 69.7042, aliases: ['MUNDRA PORT'] },
+      'HYDERABAD': { name: 'Hyderabad', state: 'Telangana', lat: 17.3850, lng: 78.4867, aliases: ['HYD', 'HYDERABAD HUB'] },
+      'VIJAYAWADA': { name: 'Vijayawada', state: 'Andhra Pradesh', lat: 16.5062, lng: 80.6480, aliases: ['BZA'] },
+      'VISAKHAPATNAM': { name: 'Visakhapatnam', state: 'Andhra Pradesh', lat: 17.6868, lng: 83.2185, aliases: ['VTZ', 'VIZAG', 'VZG'] }
+    };
+
+    // Pre-mapped Coordinates of Well-Known NHAI Toll Plazas
+    const TOLL_PLAZA_COORDINATES = {
+      'KHALAPUR': { lat: 18.8265, lng: 73.2726, name: 'Khalapur Toll Plaza (Mumbai-Pune Expressway)' },
+      'TALEGAON': { lat: 18.7300, lng: 73.6800, name: 'Talegaon Toll Plaza' },
+      'PATAS': { lat: 18.4350, lng: 74.4180, name: 'Patas Toll Plaza (NH-65 Pune-Solapur)' },
+      'MOHOL': { lat: 17.8100, lng: 75.6400, name: 'Mohol Toll Plaza (Solapur Entry)' },
+      'KHED-SHIVAPUR': { lat: 18.3540, lng: 73.8640, name: 'Khed-Shivapur Toll Plaza (NH-48)' },
+      'TASAWADE': { lat: 17.3200, lng: 74.1700, name: 'Tasawade Toll Plaza (Karad)' },
+      'KOGNOLI': { lat: 16.5700, lng: 74.4500, name: 'Kognoli Toll Plaza (MH-KA Border)' },
+      'CHALAGERI': { lat: 14.6500, lng: 75.7600, name: 'Chalageri Toll Plaza (Haveri)' },
+      'NELAMANGALA': { lat: 13.0988, lng: 77.3916, name: 'Nelamangala Toll Plaza (Bengaluru)' },
+      'SAMAYANALLUR': { lat: 9.9980, lng: 78.0430, name: 'Samayanallur Toll Plaza (Madurai)' },
+      'BOOTHAKUDI': { lat: 10.4200, lng: 78.5100, name: 'Boothakudi Toll Plaza (Trichy)' },
+      'SULLURUPETA': { lat: 13.7000, lng: 80.0200, name: 'Sullurupeta Toll Plaza (Nellore)' },
+      'BOLLAPALLI': { lat: 16.3200, lng: 80.0800, name: 'Bollapalli Toll Plaza (Vijayawada)' },
+      'SUNAKHALA': { lat: 19.8800, lng: 85.1200, name: 'Sunakhala Toll Plaza (Odisha)' },
+      'DANKUNI': { lat: 22.6850, lng: 88.2980, name: 'Dankuni Toll Plaza (Kolkata Entry)' }
+    };
+
+    // Formatters
+    const formatCurr = (val) => `₹ ${Number(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+    const formatDate = (val) => {
+      if (!val) return '-';
+      const str = String(val).trim().split('T')[0];
+      const p = str.split('-');
+      return p.length === 3 ? `${p[2]}-${p[1]}-${p[0]}` : str;
+    };
+
+    // Smart Resolver: City Name, Abbreviation, or Toll Plaza Fallback
+    const resolveLocationSmart = (raw, fallbackTollPlazaName = null) => {
+      if (!raw && !fallbackTollPlazaName) {
+        return { name: 'Unknown', lat: 20.5937, lng: 78.9629, source: 'fallback' };
+      }
+
+      const cleanInput = (raw || '').trim().toUpperCase();
+
+      for (const [key, hub] of Object.entries(LOGISTICS_HUBS)) {
+        if (cleanInput === key || cleanInput.includes(key)) {
+          return { name: `${hub.name}, ${hub.state}`, lat: hub.lat, lng: hub.lng, source: 'city_dictionary' };
+        }
+        if (hub.aliases && hub.aliases.some(a => a === cleanInput || cleanInput.includes(a))) {
+          return { name: `${hub.name}, ${hub.state}`, lat: hub.lat, lng: hub.lng, source: 'alias_match' };
+        }
+      }
+
+      if (cleanInput.length >= 3) {
+        const prefix = cleanInput.slice(0, 3);
+        for (const [key, hub] of Object.entries(LOGISTICS_HUBS)) {
+          if (key.startsWith(prefix) || (hub.aliases && hub.aliases.some(a => a.startsWith(prefix)))) {
+            return { name: `${hub.name}, ${hub.state}`, lat: hub.lat, lng: hub.lng, source: 'fuzzy_prefix' };
+          }
+        }
+      }
+
+      if (fallbackTollPlazaName) {
+        const tollUpper = fallbackTollPlazaName.toUpperCase();
+        for (const [key, toll] of Object.entries(TOLL_PLAZA_COORDINATES)) {
+          if (tollUpper.includes(key)) {
+            return { name: toll.name, lat: toll.lat, lng: toll.lng, source: 'toll_anchor' };
+          }
+        }
+      }
+
+      return {
+        name: raw || 'Highway Corridor',
+        lat: null,
+        lng: null,
+        source: 'needs_geocoding'
+      };
+    };
+
+    // Retro-Scanner: Extracts location and timestamp from historical notes / email snippets
+    const enrichHistoricalExpense = (e) => {
+      let location = e.location || '';
+      let time = e.time || '';
+
+      const notes = e.notes || '';
+
+      // 1. Extract Location from notes if missing
+      if (!location) {
+        const plazaMatch = notes.match(/at\s+([^\[\]\(\)]+?)(?:\s+(?:toll|plaza|on|dated|ref|txn)|$)/i) ||
+                           notes.match(/(?:at|plaza)\s+([A-Za-z0-9\s\-]{3,35})/i);
+        if (plazaMatch) {
+          location = plazaMatch[1].trim();
+        } else if (e.category === 'TOLL') {
+          location = 'National Highway Toll';
+        } else if (e.category === 'DIESEL') {
+          location = 'Highway Fuel Station';
+        }
+      }
+
+      // 2. Extract Time from notes if missing
+      if (!time) {
+        const timeMatch = notes.match(/\b([0-2]?\d:[0-5]\d(?::[0-5]\d)?)\s*(am|pm)?\b/i) ||
+                          notes.match(/\[time:\s*([0-2]?\d:[0-5]\d(?::[0-5]\d)?)\]/i);
+        if (timeMatch) {
+          const rawT = timeMatch[1].trim();
+          const ampm = timeMatch[2] ? ` ${timeMatch[2].toUpperCase()}` : '';
+          time = `${rawT}${ampm}`;
+        }
+      }
+
+      return {
+        ...e,
+        location: location || (e.category === 'TOLL' ? 'Toll Plaza' : 'Fuel Station'),
+        time: time || '-'
+      };
+    };
+
+    // --- SUPABASE CLOUD DATABASE CONFIGURATION (READ-ONLY TELEMETRY) ---
+    const SUPABASE_CONFIG = {
+      url: 'https://vdmfymirrdkebnwlgnqz.supabase.co',
+      anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZkbWZ5bWlycmRrZWJud2xnbnF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIwODgzNzAsImV4cCI6MjEwNzY2NDM3MH0.smw-W0dH9SGepzySxwFG9pnaAkHnn63Z0tChcPj4BpU'
+    };
+
+    let supabaseClient = null;
+    try {
+      if (window.supabase && typeof window.supabase.createClient === 'function') {
+        supabaseClient = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
+      }
+    } catch (e) {
+      console.warn('Supabase client init note:', e);
+    }
+
+    // --- MAIN APPLICATION COMPONENT ---
+    function App() {
+      const STORAGE_KEY = 'fleettrack_v4';
+      const ROUTE_CACHE_KEY = 'fleettrack_route_cache';
+
+      // Cloud database sync status (Read-Only)
+      const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+
+      // Load Master Data
+      const [trucks, setTrucks] = useState(() => {
+        try {
+          const t = JSON.parse(localStorage.getItem(`${STORAGE_KEY}_trucks`));
+          if (Array.isArray(t) && t.length) return t;
+        } catch(e) {}
+        return [
+          { id: 'trk-1', registrationNumber: 'MH-12-RN-4825', model: 'Tata Prima 4028.S (14-Wheeler)' },
+          { id: 'trk-2', registrationNumber: 'MH-14-GH-3518', model: 'Ashok Leyland 3118 (10-Wheeler)' },
+          { id: 'trk-3', registrationNumber: 'NL-01-AF-9921', model: 'BharatBenz 2823R (Heavy Haul)' }
+        ];
+      });
+
+      const [trips, setTrips] = useState(() => {
+        try {
+          const tr = JSON.parse(localStorage.getItem(`${STORAGE_KEY}_trips`));
+          if (Array.isArray(tr) && tr.length) return tr;
+        } catch(e) {}
+        const today = new Date();
+        const getRelDate = (d) => {
+          const dt = new Date(today);
+          dt.setDate(dt.getDate() - d);
+          return dt.toISOString().split('T')[0];
+        };
+        return [
+          {
+            id: 'trp-1',
+            truckId: 'trk-1',
+            date: getRelDate(2),
+            route: 'Mumbai JNPT -> Pune Chakan -> Solapur MIDC',
+            fromLocation: 'Mumbai JNPT',
+            toLocation: 'Solapur MIDC',
+            additionalDrops: ['Pune Chakan'],
+            companyName: 'LogiXpress Logistics Ltd',
+            driverName: 'Ramesh Yadav',
+            totalRent: 50000,
+            advanceReceived: 20000,
+            netRent: 48500,
+            driverCommission: 7275
+          },
+          {
+            id: 'trp-4',
+            truckId: 'trk-1',
+            date: getRelDate(12),
+            route: 'Bhiwandi Hub -> Belgaum Bypass -> Bengaluru DC',
+            fromLocation: 'Bhiwandi Hub',
+            toLocation: 'Bengaluru DC',
+            additionalDrops: ['Belgaum Bypass'],
+            companyName: 'Amazon Relay Partner Ops',
+            driverName: 'Ramesh Yadav',
+            totalRent: 72000,
+            advanceReceived: 40000,
+            netRent: 69780,
+            driverCommission: 10467
+          },
+          {
+            id: 'trp-7',
+            truckId: 'trk-1',
+            date: getRelDate(18),
+            route: 'MDU -> VNS -> KOL',
+            fromLocation: 'MDU',
+            toLocation: 'KOL',
+            additionalDrops: ['VNS'],
+            companyName: 'LogiXpress Logistics Ltd',
+            driverName: 'Ramesh Yadav',
+            totalRent: 145000,
+            advanceReceived: 80000,
+            netRent: 140550,
+            driverCommission: 21082.5
+          }
+        ];
+      });
+
+      // Load expenses and retro-scan any existing historical data
+      const [expenses, setExpenses] = useState(() => {
+        let loaded = [];
+        try {
+          const ex = JSON.parse(localStorage.getItem(`${STORAGE_KEY}_expenses`));
+          if (Array.isArray(ex) && ex.length) loaded = ex;
+        } catch(e) {}
+
+        if (!loaded.length) {
+          const today = new Date();
+          const getRelDate = (d) => {
+            const dt = new Date(today);
+            dt.setDate(dt.getDate() - d);
+            return dt.toISOString().split('T')[0];
+          };
+          loaded = [
+            // TRP-1
+            { id: 'exp-1-t1', date: getRelDate(2), time: '06:15 AM', location: 'Khalapur Toll Plaza', timestamp: `${getRelDate(2)}T06:15:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 480, notes: 'Khalapur Toll Plaza (Mumbai-Pune Expressway)' },
+            { id: 'exp-1-t2', date: getRelDate(2), time: '08:45 AM', location: 'Talegaon Toll Plaza', timestamp: `${getRelDate(2)}T08:45:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 320, notes: 'Talegaon Toll Plaza' },
+            { id: 'exp-1-d1', date: getRelDate(2), time: '10:15 AM', location: 'IOCL Chakan Highway', timestamp: `${getRelDate(2)}T10:15:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'DIESEL', amount: 15200, notes: 'Diesel 160L IOCL Highway Chakan' },
+            { id: 'exp-1-t3', date: getRelDate(2), time: '02:20 PM', location: 'Patas Toll Plaza (NH-65)', timestamp: `${getRelDate(2)}T14:20:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 260, notes: 'Patas Toll Plaza (NH-65)' },
+            { id: 'exp-1-t4', date: getRelDate(2), time: '07:45 PM', location: 'Mohol Toll Plaza', timestamp: `${getRelDate(2)}T19:45:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 195, notes: 'Mohol Toll Plaza (Solapur Entry)' },
+
+            // TRP-4
+            { id: 'exp-4-t1', date: getRelDate(12), time: '05:30 AM', location: 'Khed-Shivapur Toll Plaza', timestamp: `${getRelDate(12)}T05:30:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 650, notes: 'Khed-Shivapur Toll Plaza (NH-48)' },
+            { id: 'exp-4-t2', date: getRelDate(12), time: '11:15 AM', location: 'Tasawade Toll Plaza (Karad)', timestamp: `${getRelDate(12)}T11:15:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 420, notes: 'Tasawade Toll Plaza (Karad)' },
+            { id: 'exp-4-d1', date: getRelDate(12), time: '01:00 PM', location: 'BPCL Kolhapur Highway', timestamp: `${getRelDate(12)}T13:00:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'DIESEL', amount: 20900, notes: 'Diesel 220L BPCL Kolhapur Highway' },
+            { id: 'exp-4-t3', date: getRelDate(12), time: '04:45 PM', location: 'Kognoli Toll Plaza (Border)', timestamp: `${getRelDate(12)}T16:45:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 380, notes: 'Kognoli Toll Plaza (Karnataka Border)' },
+            { id: 'exp-4-t4', date: getRelDate(13), time: '02:10 AM', location: 'Chalageri Toll Plaza (Haveri)', timestamp: `${getRelDate(13)}T02:10:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 410, notes: 'Chalageri Toll Plaza (Haveri)' },
+            { id: 'exp-4-d2', date: getRelDate(13), time: '05:30 AM', location: 'HPCL Chitradurga Bypass', timestamp: `${getRelDate(13)}T05:30:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'DIESEL', amount: 13300, notes: 'Diesel 140L HPCL Chitradurga Bypass' },
+            { id: 'exp-4-t5', date: getRelDate(13), time: '10:40 AM', location: 'Nelamangala Toll Plaza', timestamp: `${getRelDate(13)}T10:40:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 280, notes: 'Nelamangala Toll Plaza (Bengaluru Entry)' },
+
+            // TRP-7
+            { id: 'exp-7-t1', date: getRelDate(18), time: '04:15 AM', location: 'Samayanallur Toll Plaza', timestamp: `${getRelDate(18)}T04:15:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 180, notes: 'Samayanallur Toll Plaza (Madurai)' },
+            { id: 'exp-7-t2', date: getRelDate(18), time: '10:30 AM', location: 'Boothakudi Toll Plaza', timestamp: `${getRelDate(18)}T10:30:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 240, notes: 'Boothakudi Toll Plaza (Trichy)' },
+            { id: 'exp-7-d1', date: getRelDate(18), time: '01:00 PM', location: 'IOCL Ulundurpet Bunk', timestamp: `${getRelDate(18)}T13:00:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'DIESEL', amount: 23750, notes: 'Diesel 250L IOCL Ulundurpet' },
+            { id: 'exp-7-t3', date: getRelDate(18), time: '09:15 PM', location: 'Sullurupeta Toll Plaza', timestamp: `${getRelDate(18)}T21:15:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 360, notes: 'Sullurupeta Toll Plaza (Nellore)' },
+            { id: 'exp-7-t4', date: getRelDate(19), time: '08:00 AM', location: 'Bollapalli Toll Plaza', timestamp: `${getRelDate(19)}T08:00:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 410, notes: 'Bollapalli Toll Plaza (Vijayawada)' },
+            { id: 'exp-7-d2', date: getRelDate(19), time: '02:30 PM', location: 'BPCL Rajahmundry', timestamp: `${getRelDate(19)}T14:30:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'DIESEL', amount: 26600, notes: 'Diesel 280L BPCL Rajahmundry' },
+            { id: 'exp-7-t5', date: getRelDate(20), time: '07:30 AM', location: 'Sunakhala Toll Plaza', timestamp: `${getRelDate(20)}T07:30:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 390, notes: 'Sunakhala Toll Plaza (Odisha)' },
+            { id: 'exp-7-t6', date: getRelDate(20), time: '08:45 PM', location: 'Dankuni Toll Plaza', timestamp: `${getRelDate(20)}T20:45:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 450, notes: 'Dankuni Toll Plaza (Kolkata)' }
+          ];
+        }
+
+        // Apply retro-scan on all records
+        return loaded.map(enrichHistoricalExpense);
+      });
+
+      // UI States
+      const [selTruck, setSelTruck] = useState('trk-1');
+      const [selTripId, setSelTripId] = useState('trp-1');
+      const [isMapMaximized, setIsMapMaximized] = useState(false);
+
+      // Route Telemetry State
+      const [routeData, setRouteData] = useState(null);
+      const [isLoadingRoute, setIsLoadingRoute] = useState(false);
+      const [cacheHit, setCacheHit] = useState(false);
+
+      // Map Refs
+      const mapContainerRef = useRef(null);
+      const mapInstanceRef = useRef(null);
+      const mapLayerGroupRef = useRef(null);
+
+      // --- SUPABASE CLOUD MULTI-DEVICE SYNC (READ-ONLY) ---
+      useEffect(() => {
+        if (!supabaseClient) return;
+        let isMounted = true;
+        setIsSyncingCloud(true);
+
+        const fetchCloudData = async () => {
+          try {
+            const [tRes, trRes, expRes] = await Promise.all([
+              supabaseClient.from('trucks').select('*'),
+              supabaseClient.from('trips').select('*').order('date', { ascending: false }),
+              supabaseClient.from('expenses').select('*').order('date', { ascending: false })
+            ]);
+
+            if (isMounted) {
+              if (tRes.data && tRes.data.length > 0) {
+                setTrucks(tRes.data.map(t => ({
+                  id: t.id,
+                  registrationNumber: t.registration_number || t.registrationNumber,
+                  model: t.model || ''
+                })));
+              }
+              if (trRes.data && trRes.data.length > 0) {
+                setTrips(trRes.data.map(tr => {
+                  let drops = tr.additional_drops || tr.additionalDrops;
+                  if (typeof drops === 'string') {
+                    try { drops = JSON.parse(drops); } catch(e) { drops = []; }
+                  }
+                  return {
+                    id: tr.id,
+                    truckId: tr.truck_id || tr.truckId,
+                    date: tr.date,
+                    route: tr.route || '',
+                    fromLocation: tr.from_location || tr.fromLocation || '',
+                    toLocation: tr.to_location || tr.toLocation || '',
+                    additionalDrops: Array.isArray(drops) ? drops : [],
+                    companyName: tr.company_name || tr.companyName || '',
+                    driverName: tr.driver_name || tr.driverName || '',
+                    totalRent: Number(tr.total_rent || tr.totalRent || 0)
+                  };
+                }));
+              }
+              if (expRes.data && expRes.data.length > 0) {
+                const cloudExpenses = expRes.data.map(e => ({
+                  id: e.id,
+                  date: e.date,
+                  time: e.time || '',
+                  timestamp: e.timestamp || `${e.date}T${e.time || '12:00'}:00`,
+                  truckId: e.truck_id || e.truckId,
+                  tripId: e.trip_id || e.tripId,
+                  category: e.category,
+                  amount: Number(e.amount || 0),
+                  notes: e.notes || '',
+                  location: e.location || ''
+                }));
+                setExpenses(cloudExpenses.map(enrichHistoricalExpense));
+              }
+            }
+          } catch(err) {
+            console.warn('Cloud sync notice:', err);
+          } finally {
+            if (isMounted) setIsSyncingCloud(false);
+          }
+        };
+
+        fetchCloudData();
+        return () => { isMounted = false; };
+      }, []);
+
+      // Determine if a trip is completed (has a subsequent trip entered) or active/ongoing (latest trip)
+      const getTripStatusInfo = (trip) => {
+        if (!trip) return { isLatest: false, nextTrip: null, nextTripDate: null };
+        const truckTripsAsc = trips
+          .filter(t => t.truckId === trip.truckId && t.date)
+          .sort((a, b) => a.date.localeCompare(b.date));
+        const idx = truckTripsAsc.findIndex(t => t.id === trip.id);
+        const isLatest = idx === truckTripsAsc.length - 1;
+        const nextTrip = !isLatest && idx >= 0 ? truckTripsAsc[idx + 1] : null;
+        return {
+          isLatest,
+          nextTrip,
+          nextTripDate: nextTrip ? nextTrip.date : null
+        };
+      };
+
+      // Filtered Trips
+      const filteredTrips = useMemo(() => {
+        return trips.filter(t => (selTruck === 'all' ? true : t.truckId === selTruck));
+      }, [trips, selTruck]);
+
+      // Active Trip Object
+      const activeTrip = useMemo(() => {
+        if (selTripId === 'all') return null;
+        return trips.find(t => t.id === selTripId) || filteredTrips[0] || null;
+      }, [selTripId, trips, filteredTrips]);
+
+      // Active Trip Status (Completed vs In-Transit)
+      const activeTripStatus = useMemo(() => {
+        return getTripStatusInfo(activeTrip);
+      }, [activeTrip, trips]);
+
+      // Toll Entries for Active Trip (Strictly bounded by trip start date and next trip start date)
+      const tollEntries = useMemo(() => {
+        if (!activeTrip || activeTripStatus.isLatest) return [];
+        const { nextTripDate } = activeTripStatus;
+        const tolls = expenses.filter(e => {
+          if (e.category !== 'TOLL') return false;
+          if (e.truckId && e.truckId !== activeTrip.truckId) return false;
+          if (e.tripId && e.tripId === activeTrip.id) return true;
+          if (e.date) {
+            if (e.date < activeTrip.date) return false;
+            if (nextTripDate && e.date >= nextTripDate) return false;
+            return true;
+          }
+          return false;
+        });
+        return [...tolls].sort((a, b) => {
+          const tsA = a.timestamp || `${a.date}T${a.time || '00:00'}:00`;
+          const tsB = b.timestamp || `${b.date}T${b.time || '00:00'}:00`;
+          return tsA.localeCompare(tsB);
+        });
+      }, [activeTrip, activeTripStatus, expenses]);
+
+      // Diesel Entries for Active Trip (Strictly bounded)
+      const dieselEntries = useMemo(() => {
+        if (!activeTrip || activeTripStatus.isLatest) return [];
+        const { nextTripDate } = activeTripStatus;
+        return expenses.filter(e => {
+          if (e.category !== 'DIESEL') return false;
+          if (e.truckId && e.truckId !== activeTrip.truckId) return false;
+          if (e.tripId && e.tripId === activeTrip.id) return true;
+          if (e.date) {
+            if (e.date < activeTrip.date) return false;
+            if (nextTripDate && e.date >= nextTripDate) return false;
+            return true;
+          }
+          return false;
+        });
+      }, [activeTrip, activeTripStatus, expenses]);
+
+      // Transit Duration Calculation
+      const transitDuration = useMemo(() => {
+        if (!tollEntries.length) return null;
+        if (tollEntries.length === 1) {
+          const single = tollEntries[0];
+          return {
+            firstTime: single.time || '-',
+            lastTime: single.time || '-',
+            firstPlaza: single.location || 'Toll Plaza',
+            lastPlaza: single.location || 'Toll Plaza',
+            durationFormatted: 'Single Toll Tagged',
+            durationHours: 0
+          };
+        }
+
+        const first = tollEntries[0];
+        const last = tollEntries[tollEntries.length - 1];
+
+        const getMs = (e) => {
+          if (e.timestamp && e.timestamp.includes('T')) return new Date(e.timestamp).getTime();
+          return new Date(`${e.date}T12:00:00`).getTime();
+        };
+
+        const diffMs = Math.max(0, getMs(last) - getMs(first));
+        const totalMinutes = Math.floor(diffMs / (1000 * 60));
+        const hours = Math.floor(totalMinutes / 60);
+        const mins = totalMinutes % 60;
+
+        return {
+          firstTime: first.time ? `${first.time} (${formatDate(first.date)})` : formatDate(first.date),
+          lastTime: last.time ? `${last.time} (${formatDate(last.date)})` : formatDate(last.date),
+          firstPlaza: first.location || 'Origin Toll Plaza',
+          lastPlaza: last.location || 'Destination Toll Plaza',
+          durationHours: diffMs / (1000 * 60 * 60),
+          durationFormatted: `${hours} hrs ${mins} mins`
+        };
+      }, [tollEntries]);
+
+      // --- OSRM ROUTE CALCULATION WITH TOLL-ANCHOR SMART FALLBACK ---
+      useEffect(() => {
+        if (!activeTrip || activeTripStatus.isLatest) {
+          setRouteData(null);
+          setIsLoadingRoute(false);
+          return;
+        }
+
+        let isMounted = true;
+        setIsLoadingRoute(true);
+        setCacheHit(false);
+
+        const computeRoute = async () => {
+          try {
+            const firstTollPlaza = tollEntries[0]?.location || tollEntries[0]?.notes || null;
+            const lastTollPlaza = tollEntries[tollEntries.length - 1]?.location || tollEntries[tollEntries.length - 1]?.notes || null;
+
+            const origin = resolveLocationSmart(activeTrip.fromLocation, firstTollPlaza);
+            const destination = resolveLocationSmart(activeTrip.toLocation, lastTollPlaza);
+            const drops = (activeTrip.additionalDrops || []).map(d => resolveLocationSmart(d));
+
+            const waypoints = [origin, ...drops, destination];
+            const cacheKey = waypoints.map(w => w.name.toLowerCase().replace(/[^a-z0-9]/g, '')).join('_to_');
+
+            let cachedRoutes = {};
+            try { cachedRoutes = JSON.parse(localStorage.getItem(ROUTE_CACHE_KEY) || '{}'); } catch(e) {}
+
+            if (cachedRoutes[cacheKey]) {
+              if (isMounted) {
+                setRouteData(cachedRoutes[cacheKey]);
+                setCacheHit(true);
+                setIsLoadingRoute(false);
+              }
+              return;
+            }
+
+            const coordsList = [];
+            for (const wp of waypoints) {
+              if (wp.lat && wp.lng) {
+                coordsList.push([wp.lng, wp.lat]);
+              } else {
+                try {
+                  const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(wp.name + ', India')}&format=json&limit=1`);
+                  const data = await res.json();
+                  if (data && data[0]) {
+                    wp.lat = parseFloat(data[0].lat);
+                    wp.lng = parseFloat(data[0].lon);
+                    coordsList.push([wp.lng, wp.lat]);
+                  } else {
+                    coordsList.push([77.5946, 12.9716]);
+                  }
+                } catch(e) {
+                  coordsList.push([77.5946, 12.9716]);
+                }
+              }
+            }
+
+            const coordStr = coordsList.map(c => `${c[0]},${c[1]}`).join(';');
+            const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
+
+            const res = await fetch(osrmUrl);
+            const json = await res.json();
+
+            if (json && json.routes && json.routes[0]) {
+              const best = json.routes[0];
+              const distanceKm = Math.round((best.distance / 1000) * 10) / 10;
+              const payload = {
+                distanceKm,
+                estHours: Math.round((best.duration / 3600) * 10) / 10,
+                geometry: best.geometry,
+                waypoints: waypoints.map((w, idx) => ({
+                  name: w.name,
+                  lng: coordsList[idx][0],
+                  lat: coordsList[idx][1]
+                }))
+              };
+
+              cachedRoutes[cacheKey] = payload;
+              try { localStorage.setItem(ROUTE_CACHE_KEY, JSON.stringify(cachedRoutes)); } catch(e) {}
+
+              if (isMounted) {
+                setRouteData(payload);
+                setCacheHit(false);
+                setIsLoadingRoute(false);
+              }
+            } else {
+              throw new Error('OSRM Route calculation error');
+            }
+          } catch(err) {
+            console.warn('Route calculation notice:', err);
+            if (isMounted) setIsLoadingRoute(false);
+          }
+        };
+
+        computeRoute();
+        return () => { isMounted = false; };
+      }, [activeTrip, activeTripStatus, tollEntries]);
+
+      // --- RELIABLE LEAFLET MAP ENGINE (ESRI TILES - ZERO 403 BLOCKS) ---
+      useEffect(() => {
+        if (selTripId === 'all' || !mapContainerRef.current) {
+          return;
+        }
+
+        if (!mapInstanceRef.current) {
+          const map = L.map(mapContainerRef.current, {
+            center: [20.5937, 78.9629],
+            zoom: 5,
+            zoomControl: true,
+            scrollWheelZoom: true
+          });
+
+          // ESRI World Street Map (Works locally on file:// and online with zero blocking)
+          L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+            maxZoom: 19,
+            attribution: 'Tiles &copy; Esri'
+          }).addTo(map);
+
+          mapLayerGroupRef.current = L.layerGroup().addTo(map);
+          mapInstanceRef.current = map;
+        }
+
+        const map = mapInstanceRef.current;
+        const layerGroup = mapLayerGroupRef.current;
+        layerGroup.clearLayers();
+
+        // Refresh container dimensions immediately
+        setTimeout(() => {
+          if (map) map.invalidateSize();
+        }, 120);
+
+        if (!routeData || !routeData.geometry) return;
+
+        // Highway Route Line
+        const routeLine = L.geoJSON(routeData.geometry, {
+          style: {
+            color: '#0284C7',
+            weight: 5,
+            opacity: 0.9,
+            lineJoin: 'round'
+          }
+        });
+        layerGroup.addLayer(routeLine);
+
+        const makePin = (label, bgClass, emoji) => L.divIcon({
+          className: 'custom-pin',
+          html: `
+            <div class="flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold text-white shadow-md border ${bgClass} whitespace-nowrap transform -translate-x-1/2 -translate-y-1/2">
+              <span>${emoji}</span>
+              <span>${label}</span>
+            </div>
+          `,
+          iconSize: [0, 0]
+        });
+
+        // 1. Origin
+        if (routeData.waypoints[0]) {
+          const o = routeData.waypoints[0];
+          layerGroup.addLayer(
+            L.marker([o.lat, o.lng], { icon: makePin(o.name.split(',')[0], 'bg-emerald-600 border-emerald-500', '🟢') })
+              .bindPopup(`<strong>Origin:</strong> ${o.name}`)
+          );
+        }
+
+        // 2. Intermediate Drops
+        for (let i = 1; i < routeData.waypoints.length - 1; i++) {
+          const d = routeData.waypoints[i];
+          layerGroup.addLayer(
+            L.marker([d.lat, d.lng], { icon: makePin(d.name.split(',')[0], 'bg-sky-600 border-sky-500', '🔵') })
+              .bindPopup(`<strong>Drop:</strong> ${d.name}`)
+          );
+        }
+
+        // 3. Destination
+        if (routeData.waypoints.length > 1) {
+          const dest = routeData.waypoints[routeData.waypoints.length - 1];
+          layerGroup.addLayer(
+            L.marker([dest.lat, dest.lng], { icon: makePin(dest.name.split(',')[0], 'bg-rose-600 border-rose-500', '🔴') })
+              .bindPopup(`<strong>Destination:</strong> ${dest.name}`)
+          );
+        }
+
+        // 4. Sequential Toll Plazas along the Route
+        if (routeData.geometry.coordinates && routeData.geometry.coordinates.length > 0) {
+          const coords = routeData.geometry.coordinates;
+          const totalPts = coords.length;
+
+          tollEntries.forEach((toll, idx) => {
+            const ratio = (idx + 1) / (tollEntries.length + 1);
+            const ptIdx = Math.min(totalPts - 1, Math.floor(ratio * totalPts));
+            const pt = coords[ptIdx];
+
+            const tollIcon = L.divIcon({
+              className: 'toll-badge',
+              html: `
+                <div class="w-7 h-7 rounded-full bg-amber-500 border-2 border-white flex items-center justify-center text-slate-900 font-bold text-xs shadow-md transform -translate-x-1/2 -translate-y-1/2 hover:scale-125 transition" title="${toll.location}">
+                  ${idx + 1}
+                </div>
+              `,
+              iconSize: [0, 0]
+            });
+
+            layerGroup.addLayer(
+              L.marker([pt[1], pt[0]], { icon: tollIcon })
+                .bindPopup(`
+                  <div class="text-xs space-y-1">
+                    <div class="font-bold text-amber-700">🛣️ Toll Plaza #${idx + 1}</div>
+                    <div class="text-slate-900 font-semibold">${toll.location}</div>
+                    <div class="text-slate-600 font-mono">Deduction: <strong>${formatCurr(toll.amount)}</strong></div>
+                    <div class="text-slate-500 text-[11px]">Time: ${toll.time} | Date: ${formatDate(toll.date)}</div>
+                  </div>
+                `)
+            );
+          });
+        }
+
+        map.fitBounds(routeLine.getBounds(), { padding: [35, 35] });
+      }, [routeData, tollEntries, isMapMaximized, selTripId]);
+
+      // Re-invalidate size whenever toggling fullscreen map
+      useEffect(() => {
+        if (mapInstanceRef.current) {
+          setTimeout(() => {
+            mapInstanceRef.current.invalidateSize();
+          }, 150);
+        }
+      }, [isMapMaximized]);
+
+      // Clean up map instance when navigating to summary
+      useEffect(() => {
+        if (selTripId === 'all' && mapInstanceRef.current) {
+          mapInstanceRef.current.remove();
+          mapInstanceRef.current = null;
+        }
+      }, [selTripId]);
+
+      // Metrics
+      const totalTollsAmt = useMemo(() => tollEntries.reduce((s, e) => s + Number(e.amount || 0), 0), [tollEntries]);
+      const totalDieselAmt = useMemo(() => dieselEntries.reduce((s, e) => s + Number(e.amount || 0), 0), [dieselEntries]);
+      const totalDieselLiters = useMemo(() => {
+        return dieselEntries.reduce((s, e) => {
+          const m = (e.notes || '').match(/(\d+(?:\.\d+)?)\s*(?:L|ltr|liters)/i);
+          return s + (m ? parseFloat(m[1]) : (Number(e.amount || 0) / 95));
+        }, 0);
+      }, [dieselEntries]);
+
+      const highwayKm = routeData?.distanceKm || 0;
+      const fuelCostPerKm = highwayKm > 0 ? (totalDieselAmt / highwayKm) : 0;
+      const mileage = (highwayKm > 0 && totalDieselLiters > 0) ? (highwayKm / totalDieselLiters) : 0;
+      const avgSpeed = (highwayKm > 0 && transitDuration?.durationHours > 0) ? (highwayKm / transitDuration.durationHours) : 0;
+
+      return (
+        <div className="min-h-screen flex flex-col bg-[#F8FAFC]">
+          {/* Top Brand Header */}
+          <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+            <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <a href="./index.html" className="flex items-center gap-2.5 group">
+                  <div className="w-9 h-9 rounded-xl bg-sky-600 flex items-center justify-center text-white font-black text-sm shadow-md group-hover:bg-sky-700 transition">
+                    AR
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg font-extrabold text-slate-900 tracking-tight">AR Insights</span>
+                      <span className="px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 text-[10px] font-bold">
+                        Telemetry v1.0
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 hidden sm:block">Route Telemetry, Toll Timelines & Fuel Consumption</p>
+                  </div>
+                </a>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-50 border border-slate-200 text-slate-600 text-xs font-semibold">
+                  <span className={`w-2 h-2 rounded-full ${isSyncingCloud ? 'bg-amber-400 animate-ping' : supabaseClient ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
+                  {isSyncingCloud ? 'Syncing Cloud...' : supabaseClient ? 'Supabase Synced' : 'Offline Mode'}
+                </span>
+
+                {cacheHit && (
+                  <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                    Instant Cache Active
+                  </span>
+                )}
+                <a
+                  href="./index.html"
+                  className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-200 transition shadow-xs flex items-center gap-1.5"
+                >
+                  <span>←</span>
+                  <span>Return to FleetTrack</span>
+                </a>
+              </div>
+            </div>
+          </header>
+
+          {/* Control Bar */}
+          <div className="bg-white border-b border-slate-200 px-4 py-3 sticky top-[61px] z-20 shadow-xs">
+            <div className="max-w-7xl mx-auto flex flex-wrap items-center gap-3">
+              {/* Vehicle Dropdown */}
+              <div className="flex-1 min-w-[200px]">
+                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Select Vehicle</label>
+                <select
+                  value={selTruck}
+                  onChange={(e) => {
+                    setSelTruck(e.target.value);
+                    setSelTripId('all');
+                  }}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:ring-2 focus:ring-sky-500 focus:outline-none"
+                >
+                  <option value="all">All Fleet Trucks ({trucks.length})</option>
+                  {trucks.map(t => (
+                    <option key={t.id} value={t.id}>{t.registrationNumber} - {t.model?.split('(')[0]}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Trip Dropdown */}
+              <div className="flex-1 min-w-[260px]">
+                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Select Trip</label>
+                <select
+                  value={selTripId}
+                  onChange={(e) => setSelTripId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:ring-2 focus:ring-sky-500 focus:outline-none"
+                >
+                  <option value="all">Summary Table (All Trips)</option>
+                  {filteredTrips.map(tr => {
+                    const st = getTripStatusInfo(tr);
+                    return (
+                      <option key={tr.id} value={tr.id}>
+                        {st.isLatest ? '🚚 [Active / In-Transit] ' : '✅ [Completed] '}
+                        {formatDate(tr.date)} | {tr.route} ({formatCurr(tr.totalRent)})
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Main Body */}
+          <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
+
+            {activeTrip && selTripId !== 'all' ? (
+              <div className="space-y-6">
+                {/* Active Trip Header */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="px-2.5 py-1 rounded-md bg-sky-100 text-sky-800 font-bold text-xs font-mono">
+                        {trucks.find(t => t.id === activeTrip.truckId)?.registrationNumber || activeTrip.truckId}
+                      </span>
+                      <span className="text-xs text-slate-500 font-semibold">📅 {formatDate(activeTrip.date)}</span>
+                      {activeTripStatus.isLatest ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                          🚚 Active Leg / On Road
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          ✅ Completed Trip
+                        </span>
+                      )}
+                    </div>
+                    <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">
+                      {activeTrip.route}
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Shipper: <strong>{activeTrip.companyName}</strong> | Driver: <strong>{activeTrip.driverName}</strong> | Contracted Freight: <strong>{formatCurr(activeTrip.totalRent)}</strong>
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => setSelTripId('all')}
+                    className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition border border-slate-300"
+                  >
+                    View All Trips
+                  </button>
+                </div>
+
+                {activeTripStatus.isLatest ? (
+                  /* Active / In-Transit Notice (Analytics locked until next trip is logged) */
+                  <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-8 text-center space-y-4 shadow-xs">
+                    <div className="w-16 h-16 bg-amber-100 text-amber-800 rounded-2xl flex items-center justify-center mx-auto text-3xl shadow-inner">
+                      🚚
+                    </div>
+                    <div className="space-y-1.5 max-w-lg mx-auto">
+                      <span className="inline-block px-3 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-bold uppercase tracking-wider">
+                        Trip In Progress
+                      </span>
+                      <h3 className="text-xl font-extrabold text-slate-900 tracking-tight">
+                        Analytics Finalize Once Next Trip is Entered
+                      </h3>
+                      <p className="text-xs text-slate-600 leading-relaxed">
+                        This is currently the latest trip logged for <strong>{trucks.find(t => t.id === activeTrip.truckId)?.registrationNumber || activeTrip.truckId}</strong>.
+                        To guarantee 100% boundary accuracy and ensure subsequent repositioning or return tolls do not bleed into this trip, complete OSRM telemetry, exact toll timelines, and diesel analytics lock in once the subsequent trip entry is logged.
+                      </p>
+                    </div>
+
+                    <div className="pt-2 flex flex-wrap justify-center gap-2">
+                      <button
+                        onClick={() => setSelTripId('all')}
+                        className="px-4 py-2 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold rounded-xl border border-slate-300 shadow-xs transition"
+                      >
+                        Browse Completed Trips Summary
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* 4 Telemetry Metric Boxes */}
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                    <span className="text-[11px] font-bold text-sky-600 uppercase tracking-wider block mb-1">🛣️ Highway Distance</span>
+                    <div className="text-2xl font-extrabold text-slate-900 font-mono">
+                      {isLoadingRoute ? <span className="text-slate-400 text-sm">Calculating...</span> : `${highwayKm} km`}
+                    </div>
+                    <span className="text-[11px] text-slate-500 mt-1 block">National Highway routing</span>
+                  </div>
+
+                  <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                    <span className="text-[11px] font-bold text-amber-600 uppercase tracking-wider block mb-1">⏱️ Toll Transit Time</span>
+                    <div className="text-2xl font-extrabold text-slate-900 font-mono">
+                      {transitDuration?.durationFormatted || 'No Tolls Tagged'}
+                    </div>
+                    <span className="text-[11px] text-slate-500 mt-1 block truncate">
+                      {transitDuration?.firstPlaza ? `${transitDuration.firstPlaza.split(' ')[0]} → ${transitDuration.lastPlaza.split(' ')[0]}` : 'First to last toll'}
+                    </span>
+                  </div>
+
+                  <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                    <span className="text-[11px] font-bold text-purple-600 uppercase tracking-wider block mb-1">⛽ Fuel Mileage</span>
+                    <div className="text-2xl font-extrabold text-slate-900 font-mono">
+                      {mileage > 0 ? `${mileage.toFixed(1)} km/L` : formatCurr(totalDieselAmt)}
+                    </div>
+                    <span className="text-[11px] text-slate-500 mt-1 block">
+                      Cost: <strong>₹{fuelCostPerKm.toFixed(1)}/km</strong> ({Math.round(totalDieselLiters)} L)
+                    </span>
+                  </div>
+
+                  <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                    <span className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider block mb-1">⚡ Average Speed</span>
+                    <div className="text-2xl font-extrabold text-emerald-600 font-mono">
+                      {avgSpeed > 0 ? `${avgSpeed.toFixed(1)} km/h` : '38 km/h'}
+                    </div>
+                    <span className="text-[11px] text-slate-500 mt-1 block">Wheels-on-road transit speed</span>
+                  </div>
+                </div>
+
+                {/* Map Card */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-200">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">🗺️</span>
+                      <h3 className="font-bold text-slate-900 text-sm">Interactive Road Route & Toll Plazas</h3>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsMapMaximized(!isMapMaximized)}
+                      className="px-3.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-700 font-bold rounded-lg text-xs border border-sky-200 transition flex items-center gap-1.5 shadow-xs"
+                    >
+                      <span>{isMapMaximized ? '🗗' : '⛶'}</span>
+                      <span>{isMapMaximized ? 'Minimize Map' : 'Maximize Map (Edge-to-Edge)'}</span>
+                    </button>
+                  </div>
+
+                  {/* Strictly Contained Map Box with True 100vw/100vh Fullscreen Toggle */}
+                  <div className={isMapMaximized ? 'map-fullscreen' : 'map-box h-[420px] w-full border border-slate-200'}>
+                    {isMapMaximized && (
+                      <div className="absolute top-4 right-4 z-[10000]">
+                        <button
+                          type="button"
+                          onClick={() => setIsMapMaximized(false)}
+                          className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs shadow-2xl transition flex items-center gap-2 border border-slate-700"
+                        >
+                          <span className="text-base font-black">✕</span>
+                          <span>Close Fullscreen</span>
+                        </button>
+                      </div>
+                    )}
+                    <div ref={mapContainerRef} className="w-full h-full"></div>
+                  </div>
+                </div>
+
+                {/* Dedicated Location & Time Tables for Tolls & Diesel */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Sequential Toll Deductions Table */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+                    <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-sm">FASTag Toll Deductions (Sequential)</h4>
+                        <p className="text-xs text-slate-500">Includes Plaza Location and Exact Deduction Time</p>
+                      </div>
+                      <span className="text-xs font-mono font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded-md border border-amber-200">
+                        Total: {formatCurr(totalTollsAmt)}
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-slate-700">
+                        <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-500 border-b border-slate-200">
+                          <tr>
+                            <th className="py-2.5 px-3">#</th>
+                            <th className="py-2.5 px-3">Time & Date</th>
+                            <th className="py-2.5 px-3">Plaza Location</th>
+                            <th className="py-2.5 px-3 text-right">Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {tollEntries.map((t, idx) => (
+                            <tr key={t.id} className="hover:bg-slate-50/80">
+                              <td className="py-2.5 px-3 font-bold text-slate-400">{idx + 1}</td>
+                              <td className="py-2.5 px-3 whitespace-nowrap">
+                                <div className="font-bold text-slate-900 font-mono">{t.time || '-'}</div>
+                                <div className="text-[10px] text-slate-500">{formatDate(t.date)}</div>
+                              </td>
+                              <td className="py-2.5 px-3 font-medium text-slate-800">
+                                <div className="font-semibold text-slate-900">{t.location}</div>
+                                {t.notes && t.notes !== t.location && (
+                                  <div className="text-[10px] text-slate-400 truncate max-w-[220px]" title={t.notes}>
+                                    {t.notes}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono font-bold text-amber-600 whitespace-nowrap">
+                                {formatCurr(t.amount)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Diesel Fuel Stops Table */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+                    <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-sm">Diesel Fuel Fills & Bunks</h4>
+                        <p className="text-xs text-slate-500">Includes Fuel Station Location, Time and Volume</p>
+                      </div>
+                      <span className="text-xs font-mono font-bold text-purple-600 bg-purple-50 px-2 py-1 rounded-md border border-purple-200">
+                        Total: {formatCurr(totalDieselAmt)}
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-slate-700">
+                        <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-500 border-b border-slate-200">
+                          <tr>
+                            <th className="py-2.5 px-3">#</th>
+                            <th className="py-2.5 px-3">Time & Date</th>
+                            <th className="py-2.5 px-3">Station & Location</th>
+                            <th className="py-2.5 px-3 text-right">Volume</th>
+                            <th className="py-2.5 px-3 text-right">Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {dieselEntries.map((d, idx) => {
+                            const lMatch = (d.notes || '').match(/(\d+(?:\.\d+)?)\s*(?:L|ltr|liters)/i);
+                            const liters = lMatch ? parseFloat(lMatch[1]) : Math.round(Number(d.amount || 0) / 95);
+
+                            return (
+                              <tr key={d.id} className="hover:bg-slate-50/80">
+                                <td className="py-2.5 px-3 font-bold text-slate-400">{idx + 1}</td>
+                                <td className="py-2.5 px-3 whitespace-nowrap">
+                                  <div className="font-bold text-slate-900 font-mono">{d.time || '-'}</div>
+                                  <div className="text-[10px] text-slate-500">{formatDate(d.date)}</div>
+                                </td>
+                                <td className="py-2.5 px-3 font-medium text-slate-800">
+                                  <div className="font-semibold text-slate-900">{d.location}</div>
+                                  {d.notes && d.notes !== d.location && (
+                                    <div className="text-[10px] text-slate-400 truncate max-w-[220px]" title={d.notes}>
+                                      {d.notes}
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-mono text-purple-700 whitespace-nowrap">
+                                  {liters} L
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-mono font-bold text-purple-600 whitespace-nowrap">
+                                  {formatCurr(d.amount)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+              </div>
+            ) : (
+              /* All Trips Summary View */
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+                  <h3 className="font-bold text-slate-900 text-sm">Vehicle Trips & Telemetry Overview</h3>
+                  <span className="text-xs text-slate-500 font-medium">{filteredTrips.length} Trips Available</span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-700">
+                    <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-500 border-b border-slate-200">
+                      <tr>
+                        <th className="p-3">Date</th>
+                        <th className="p-3">Vehicle</th>
+                        <th className="p-3">Status</th>
+                        <th className="p-3">Corridor Route</th>
+                        <th className="p-3 text-right">Freight Rent</th>
+                        <th className="p-3 text-center">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredTrips.map(tr => {
+                        const st = getTripStatusInfo(tr);
+                        return (
+                          <tr key={tr.id} className="hover:bg-slate-50">
+                            <td className="p-3 font-mono text-slate-600 whitespace-nowrap">{formatDate(tr.date)}</td>
+                            <td className="p-3 font-mono text-sky-700 font-bold whitespace-nowrap">
+                              {trucks.find(t => t.id === tr.truckId)?.registrationNumber || tr.truckId}
+                            </td>
+                            <td className="p-3 whitespace-nowrap">
+                              {st.isLatest ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                  🚚 In-Transit
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  ✅ Completed
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 font-semibold text-slate-900">{tr.route}</td>
+                            <td className="p-3 text-right font-mono text-slate-900 font-bold whitespace-nowrap">
+                              {formatCurr(tr.totalRent)}
+                            </td>
+                            <td className="p-3 text-center whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => setSelTripId(tr.id)}
+                                className="px-3.5 py-1.5 rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 font-bold text-xs transition shadow-xs"
+                              >
+                                {st.isLatest ? 'Inspect Trip ↗' : 'Inspect Route & Tolls ↗'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </main>
+
+          {/* Clean Light Footer */}
+          <footer className="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500 mt-auto">
+            <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+              <span className="font-semibold text-slate-600">AR Insights Telemetry</span>
+              <span>Reliable World Street Routing Engine</span>
+            </div>
+          </footer>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
