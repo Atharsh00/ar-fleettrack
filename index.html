@@ -380,13 +380,59 @@
         advanceReceived: 60000,
         balancePending: 31550, // 95000 - 60000 - 2500 - 950
         notes: 'Containerized freight'
+      },
+      {
+        id: 'trp-7',
+        profileId: 'prof-1',
+        date: getRelDate(18),
+        truckId: 'trk-1',
+        companyName: 'LogiXpress Logistics Ltd',
+        driverName: 'Ramesh Yadav',
+        fromLocation: 'MDU',
+        toLocation: 'KOL',
+        additionalDrops: ['VNS'],
+        route: 'MDU -> VNS -> KOL',
+        totalRent: 145000,
+        commissionAmount: 3000,
+        isTdsDeducted: true,
+        tdsAmount: 1450,
+        netRent: 140550,
+        driverCommission: 21082.5,
+        advanceReceived: 80000,
+        balancePending: 60550,
+        notes: 'Long haul consignment (Madurai -> Varanasi -> Kolkata)'
       }
     ].map(t => ({ ...t, isSimulation: true }));
 
     const initialExpenses = [
-      { id: 'exp-1', profileId: 'prof-1', date: getRelDate(1), truckId: 'trk-1', category: 'DIESEL', amount: 16500, paymentMethod: 'Fleet Card', notes: 'Diesel 180L IOCL Highway' },
-      { id: 'exp-2', profileId: 'prof-1', date: getRelDate(3), truckId: 'trk-1', category: 'TOLL', amount: 2800, paymentMethod: 'FASTag', notes: 'Expressway tolls' },
-      { id: 'exp-3', profileId: 'prof-1', date: getRelDate(4), truckId: 'trk-2', category: 'DIESEL', amount: 21000, paymentMethod: 'Fleet Card', notes: 'Diesel 240L BPCL' },
+      // --- Sequential Toll & Fuel Telemetry for TRP-1 (Mumbai JNPT -> Pune Chakan -> Solapur MIDC) ---
+      { id: 'exp-1-t1', profileId: 'prof-1', date: getRelDate(2), time: '06:15', timestamp: `${getRelDate(2)}T06:15:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 480, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Khalapur Toll Plaza (Mumbai-Pune Expressway) [time:06:15]' },
+      { id: 'exp-1-t2', profileId: 'prof-1', date: getRelDate(2), time: '08:45', timestamp: `${getRelDate(2)}T08:45:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 320, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Talegaon Toll Plaza [time:08:45]' },
+      { id: 'exp-1-d1', profileId: 'prof-1', date: getRelDate(2), time: '10:15', timestamp: `${getRelDate(2)}T10:15:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'DIESEL', amount: 15200, paymentMethod: 'Fleet Card', notes: 'Diesel 160L IOCL Highway Chakan [time:10:15]' },
+      { id: 'exp-1-t3', profileId: 'prof-1', date: getRelDate(2), time: '14:20', timestamp: `${getRelDate(2)}T14:20:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 260, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Patas Toll Plaza (NH-65) [time:14:20]' },
+      { id: 'exp-1-t4', profileId: 'prof-1', date: getRelDate(2), time: '19:45', timestamp: `${getRelDate(2)}T19:45:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 195, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Mohol Toll Plaza [time:19:45]' },
+
+      // --- Sequential Toll & Fuel Telemetry for TRP-4 (Bhiwandi Hub -> Belgaum -> Bengaluru DC) ---
+      { id: 'exp-4-t1', profileId: 'prof-1', date: getRelDate(12), time: '05:30', timestamp: `${getRelDate(12)}T05:30:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 650, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Khed-Shivapur Toll Plaza (NH-48) [time:05:30]' },
+      { id: 'exp-4-t2', profileId: 'prof-1', date: getRelDate(12), time: '11:15', timestamp: `${getRelDate(12)}T11:15:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 420, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Tasawade Toll Plaza (Karad) [time:11:15]' },
+      { id: 'exp-4-d1', profileId: 'prof-1', date: getRelDate(12), time: '13:00', timestamp: `${getRelDate(12)}T13:00:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'DIESEL', amount: 20900, paymentMethod: 'Fleet Card', notes: 'Diesel 220L BPCL Kolhapur Highway [time:13:00]' },
+      { id: 'exp-4-t3', profileId: 'prof-1', date: getRelDate(12), time: '16:45', timestamp: `${getRelDate(12)}T16:45:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 380, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Kognoli Toll Plaza (Karnataka Border) [time:16:45]' },
+      { id: 'exp-4-t4', profileId: 'prof-1', date: getRelDate(13), time: '02:10', timestamp: `${getRelDate(13)}T02:10:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 410, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Chalageri Toll Plaza (Haveri) [time:02:10]' },
+      { id: 'exp-4-d2', profileId: 'prof-1', date: getRelDate(13), time: '05:30', timestamp: `${getRelDate(13)}T05:30:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'DIESEL', amount: 13300, paymentMethod: 'Fleet Card', notes: 'Diesel 140L HPCL Chitradurga Bypass [time:05:30]' },
+      { id: 'exp-4-t5', profileId: 'prof-1', date: getRelDate(13), time: '10:40', timestamp: `${getRelDate(13)}T10:40:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 280, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Nelamangala Toll Plaza (Bengaluru) [time:10:40]' },
+
+      // --- Sequential Toll & Fuel Telemetry for TRP-7 (MDU to KOL - Madurai to Kolkata) ---
+      { id: 'exp-7-t1', profileId: 'prof-1', date: getRelDate(18), time: '04:15', timestamp: `${getRelDate(18)}T04:15:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 180, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Samayanallur Toll Plaza (Madurai) [time:04:15]' },
+      { id: 'exp-7-t2', profileId: 'prof-1', date: getRelDate(18), time: '10:30', timestamp: `${getRelDate(18)}T10:30:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 240, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Boothakudi Toll Plaza (Trichy) [time:10:30]' },
+      { id: 'exp-7-d1', profileId: 'prof-1', date: getRelDate(18), time: '13:00', timestamp: `${getRelDate(18)}T13:00:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'DIESEL', amount: 23750, paymentMethod: 'Fleet Card', notes: 'Diesel 250L IOCL Ulundurpet [time:13:00]' },
+      { id: 'exp-7-t3', profileId: 'prof-1', date: getRelDate(18), time: '21:15', timestamp: `${getRelDate(18)}T21:15:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 360, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Sullurupeta Toll Plaza (Nellore) [time:21:15]' },
+      { id: 'exp-7-t4', profileId: 'prof-1', date: getRelDate(19), time: '08:00', timestamp: `${getRelDate(19)}T08:00:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 410, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Bollapalli Toll Plaza (Vijayawada) [time:08:00]' },
+      { id: 'exp-7-d2', profileId: 'prof-1', date: getRelDate(19), time: '14:30', timestamp: `${getRelDate(19)}T14:30:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'DIESEL', amount: 26600, paymentMethod: 'Fleet Card', notes: 'Diesel 280L BPCL Rajahmundry [time:14:30]' },
+      { id: 'exp-7-t5', profileId: 'prof-1', date: getRelDate(20), time: '07:30', timestamp: `${getRelDate(20)}T07:30:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 390, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Sunakhala Toll Plaza (Odisha) [time:07:30]' },
+      { id: 'exp-7-t6', profileId: 'prof-1', date: getRelDate(20), time: '20:45', timestamp: `${getRelDate(20)}T20:45:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 450, paymentMethod: 'FASTag', notes: 'FASTag Toll - MH-12-RN-4825 at Dankuni Toll Plaza (Kolkata) [time:20:45]' },
+
+      // --- Other Vehicle Expenses ---
+      { id: 'exp-3', profileId: 'prof-1', date: getRelDate(4), truckId: 'trk-2', category: 'DIESEL', amount: 21000, paymentMethod: 'Fleet Card', notes: 'Diesel 240L BPCL Highway' },
       { id: 'exp-4', profileId: 'prof-1', date: getRelDate(6), truckId: 'trk-2', category: 'MAINTENANCE', amount: 4500, paymentMethod: 'UPI', notes: 'Brake liner adjustment' },
       { id: 'exp-5', profileId: 'prof-1', date: getRelDate(7), truckId: 'trk-3', category: 'DIESEL', amount: 32000, paymentMethod: 'Fleet Card', notes: 'Highway fuel bulk recharge' },
       { id: 'exp-6', profileId: 'prof-1', date: getRelDate(9), truckId: 'trk-3', category: 'TOLL', amount: 4200, paymentMethod: 'FASTag', notes: 'FASTag toll charges' },
@@ -2570,6 +2616,10 @@
           const todayIso = new Date().toISOString().split('T')[0];
           const actualDate = (txnDate && txnDate <= todayIso) ? txnDate : (mail.date || todayIso);
 
+          // Extract Transaction Time (e.g. 06:15 AM, 14:30) for Telemetry
+          const timeMatch = fullText.match(/\b([0-2]?\d:[0-5]\d(?::[0-5]\d)?)\s*(am|pm)?\b/i);
+          const extractedTime = timeMatch ? timeMatch[0].trim() : null;
+
           // Extract Transaction ID / Reference No / URN
           const txnIdMatch = fullText.match(/\b(?:txn\s*number|transaction\s*(?:id|number|ref)|reference\s*(?:number|id|no)|urn|rrn)\b\s*[:\-#=]?\s*([A-Za-z0-9_-]{6,35})/i) ||
                              fullText.match(/\b(?:txn(?:\s*id|\s*no)?|ref(?:\s*no)?)\b\s*[:\-#=]?\s*([A-Za-z0-9_-]{6,35})/i);
@@ -2613,6 +2663,7 @@
             category === 'TOLL' ? `FASTag Toll - ${targetTruckReg}` : `Diesel Fuel - ${targetTruckReg}`
           ];
           if (plazaName) noteParts.push(`at ${plazaName}`);
+          if (extractedTime) noteParts.push(`[time:${extractedTime}]`);
           if (cleanTxnId) noteParts.push(`[txn:${cleanTxnId}]`);
           if (mail.id) noteParts.push(`[ref:${mail.id}]`);
           const fullNote = noteParts.join(' ');
@@ -2621,6 +2672,8 @@
             id: deterministicId,
             profileId: activeProfileId,
             date: actualDate,
+            time: extractedTime || undefined,
+            timestamp: extractedTime ? `${actualDate}T${extractedTime}` : undefined,
             createdAt: new Date().toISOString(),
             truckId: targetTruckId,
             tripId: ongoingTrip ? ongoingTrip.id : null,
@@ -6548,6 +6601,7 @@
 
       // Expense
       const [eDate, setEDate] = useState(new Date().toISOString().split('T')[0]);
+      const [eTime, setETime] = useState('');
       const [eTruck, setETruck] = useState(trucks[0]?.id || '');
       const [eTripId, setETripId] = useState('');
       const [eCat, setECat] = useState('DIESEL');
@@ -6571,18 +6625,21 @@
         e.preventDefault();
         const amt = parseFloat(eAmt);
         if (!amt || amt <= 0) return alert('Enter valid amount');
+        const formattedNotes = eTime && !eNotes.includes('[time:') ? `${eNotes.trim()} [time:${eTime}]`.trim() : eNotes;
         addTruckExpense({
           date: eDate,
+          time: eTime || undefined,
+          timestamp: eTime ? `${eDate}T${eTime}:00` : undefined,
           truckId: eTruck,
           tripId: eTripId || undefined,
           category: eCat,
           amount: amt,
           paymentMethod: eMethod || undefined,
-          notes: eNotes,
+          notes: formattedNotes,
           isReimbursable: eReimbursable
         });
         notify(`Logged ${formatCurr(amt)} expense under ${eCat}${eTripId ? ' (linked to trip)' : ''}${eReimbursable ? ' [Reimbursable - added to Company Balance Due]' : ''}`);
-        setEAmt(''); setENotes(''); setETripId(''); setEReimbursable(false);
+        setEAmt(''); setENotes(''); setETripId(''); setEReimbursable(false); setETime('');
       };
 
       // Driver
@@ -6787,10 +6844,17 @@
           {formType === 'expense' && (
             <form onSubmit={handleExpenseSubmit} className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl max-w-3xl mx-auto space-y-4">
               <h3 className="text-base font-bold text-white mb-2">Truck Operating Expense Entry</h3>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Date *</label>
                   <input type="date" required value={eDate} onChange={(e) => setEDate(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white [color-scheme:dark]" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Time (Optional)
+                    <span className="text-[10px] text-cyan-400 font-mono ml-1">Route Telemetry</span>
+                  </label>
+                  <input type="time" value={eTime} onChange={(e) => setETime(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white [color-scheme:dark]" />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Truck (Master) *</label>
@@ -10989,6 +11053,19 @@
                   </button>
                 )}
 
+                {/* AR Insights Link */}
+                <a
+                  href="./insights.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Open AR Insights (Route, Toll & Fuel Telemetry)"
+                  className="px-3 py-2 rounded-xl bg-cyan-950/50 hover:bg-cyan-900/70 text-cyan-300 hover:text-cyan-200 border border-cyan-500/40 hover:border-cyan-400 font-bold text-xs shadow-sm transition flex items-center gap-1.5 group"
+                >
+                  <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                  <span className="group-hover:text-cyan-100">AR Insights</span>
+                  <span className="text-[10px] text-cyan-400 font-mono">↗</span>
+                </a>
+
                 {/* Settings Button */}
                 <button
                   type="button"
@@ -11372,6 +11449,21 @@
                       <span>Connect Gmail</span>
                     </button>
                   )}
+
+                  {/* AR Insights New Page */}
+                  <a
+                    href="./insights.html"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setMobileDrawerOpen(false)}
+                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold text-cyan-300 bg-cyan-950/40 border border-cyan-500/30 hover:bg-cyan-900/50 transition"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                      <span>🌐 AR Insights (Route & Telemetry)</span>
+                    </span>
+                    <span className="text-[10px] text-cyan-400 font-mono">↗</span>
+                  </a>
 
                   {/* CSV Export */}
                   <button
