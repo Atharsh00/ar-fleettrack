@@ -134,9 +134,12 @@
       'KRISHNAGIRI': { name: 'Krishnagiri', state: 'Tamil Nadu', lat: 12.5186, lng: 78.2137, aliases: ['KRISHNAGIRI'] },
       'VELLORE': { name: 'Vellore', state: 'Tamil Nadu', lat: 12.9165, lng: 79.1325, aliases: ['VELLORE'] },
       'ULUNDURPET': { name: 'Ulundurpet', state: 'Tamil Nadu', lat: 11.6917, lng: 79.2908, aliases: ['ULUNDURPET'] },
+      'CALICUT': { name: 'Kozhikode (Calicut)', state: 'Kerala', lat: 11.2588, lng: 75.7804, aliases: ['CALICUT', 'KOZHIKODE', 'CLT', 'CCJ'] },
+      'COCHIN': { name: 'Kochi (Cochin)', state: 'Kerala', lat: 9.9312, lng: 76.2673, aliases: ['COCHIN', 'KOCHI', 'COK', 'ERNAKULAM'] },
+      'GOA': { name: 'Goa', state: 'Goa', lat: 15.2993, lng: 74.1240, aliases: ['GOA', 'PANAJI', 'MARGAO', 'VASCO', 'VASCO DA GAMA', 'NORTH GOA', 'SOUTH GOA'] },
       'KOLKATA': { name: 'Kolkata', state: 'West Bengal', lat: 22.5726, lng: 88.3639, aliases: ['KOL', 'KOLK', 'CALCUTTA', 'CCU'] },
       'HOWRAH': { name: 'Howrah', state: 'West Bengal', lat: 22.5958, lng: 88.2636, aliases: ['HWH', 'HOWRAH'] },
-      'KHARAGPUR': { name: 'Kharagpur', state: 'West Bengal', lat: 22.3460, lng: 87.2320, aliases: ['KGP'] },
+      'KHARAGPUR': { name: 'Kharagpur', state: 'West Bengal', lat: 22.3460, lng: 87.2320, aliases: ['KGP', 'KHARAGPUR'] },
       'DURGAPUR': { name: 'Durgapur', state: 'West Bengal', lat: 23.5204, lng: 87.3119, aliases: ['DGP'] },
       'ASANSOL': { name: 'Asansol', state: 'West Bengal', lat: 23.6739, lng: 86.9524, aliases: ['ASN'] },
       'SILIGURI': { name: 'Siliguri', state: 'West Bengal', lat: 26.7271, lng: 88.3953, aliases: ['IXB'] },
@@ -149,6 +152,7 @@
       'MANGALORE': { name: 'Mangaluru', state: 'Karnataka', lat: 12.9141, lng: 74.8560, aliases: ['IXE', 'MANGALORE'] },
       'HUBLI': { name: 'Hubballi', state: 'Karnataka', lat: 15.3647, lng: 75.1240, aliases: ['HBX', 'HUBLI'] },
       'MUMBAI': { name: 'Mumbai', state: 'Maharashtra', lat: 19.0760, lng: 72.8777, aliases: ['BOM', 'MUM', 'BOMBAY', 'MUMBAI JNPT', 'JNPT'] },
+      'KHALAPUR': { name: 'Khalapur', state: 'Maharashtra', lat: 18.8265, lng: 73.2726, aliases: ['KHALAPUR', 'KALAPUR', 'KHOPOLI'] },
       'BHIWANDI': { name: 'Bhiwandi', state: 'Maharashtra', lat: 19.2967, lng: 73.0631, aliases: ['BHIWANDI HUB', 'BHW'] },
       'PUNE': { name: 'Pune', state: 'Maharashtra', lat: 18.5204, lng: 73.8567, aliases: ['PNQ', 'PUN', 'PUNE MIDC', 'PUNE CHAKAN', 'CHAKAN'] },
       'CHAKAN': { name: 'Chakan', state: 'Maharashtra', lat: 18.7606, lng: 73.8606, aliases: ['CHAKAN MIDC', 'CHAKAN'] },
@@ -455,43 +459,111 @@
       return p.length === 3 ? `${p[2]}-${p[1]}-${p[0]}` : str;
     };
 
-    // Smart Resolver: City Name, Abbreviation, or Toll Plaza Fallback
-    const resolveLocationSmart = (raw, fallbackTollPlazaName = null) => {
-      if (!raw && !fallbackTollPlazaName) {
+    // Calculate Haversine distance in km between two lat/lng points
+    const haversineDistKm = (lat1, lon1, lat2, lon2) => {
+      if (!lat1 || !lon1 || !lat2 || !lon2) return 0;
+      const R = 6371; // Earth radius in km
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    };
+
+    // Sanitize user-entered location text (removes +1, +2, -drop, loading, etc.)
+    const cleanLocationString = (raw) => {
+      if (!raw) return '';
+      return String(raw)
+        .replace(/[\+\#]\s*\d+/g, '')       // remove +1, +2, #1, etc.
+        .replace(/\b(?:drop|loading|unloading|dc|hub|yard|depot|midc|gidc|toll|bypass|point)\b/gi, '')
+        .replace(/[\(\)\[\]\{\}\+\*\/\\_-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    };
+
+    // Smart Proximity-Aware Location Resolver (Anchored by First/Last Tolls)
+    const resolveLocationSmart = (raw, nearbyTollRef = null) => {
+      if (!raw && !nearbyTollRef) {
         return { name: 'Unknown', lat: 20.5937, lng: 78.9629, source: 'fallback' };
       }
 
-      const cleanInput = (raw || '').trim().toUpperCase();
+      const sanitized = cleanLocationString(raw);
+      const cleanUpper = sanitized.toUpperCase();
 
-      for (const [key, hub] of Object.entries(LOGISTICS_HUBS)) {
-        if (cleanInput === key || cleanInput.includes(key)) {
-          return { name: `${hub.name}, ${hub.state}`, lat: hub.lat, lng: hub.lng, source: 'city_dictionary' };
-        }
-        if (hub.aliases && hub.aliases.some(a => a === cleanInput || cleanInput.includes(a))) {
-          return { name: `${hub.name}, ${hub.state}`, lat: hub.lat, lng: hub.lng, source: 'alias_match' };
-        }
-      }
-
-      if (cleanInput.length >= 3) {
-        const prefix = cleanInput.slice(0, 3);
-        for (const [key, hub] of Object.entries(LOGISTICS_HUBS)) {
-          if (key.startsWith(prefix) || (hub.aliases && hub.aliases.some(a => a.startsWith(prefix)))) {
-            return { name: `${hub.name}, ${hub.state}`, lat: hub.lat, lng: hub.lng, source: 'fuzzy_prefix' };
-          }
-        }
-      }
-
-      if (fallbackTollPlazaName) {
-        const tollUpper = fallbackTollPlazaName.toUpperCase();
+      // 1. Resolve nearby toll anchor coordinates if provided
+      let tollAnchor = null;
+      if (nearbyTollRef) {
+        const tollUpper = String(nearbyTollRef).toUpperCase();
         for (const [key, toll] of Object.entries(TOLL_PLAZA_COORDINATES)) {
           if (tollUpper.includes(key)) {
-            return { name: toll.name, lat: toll.lat, lng: toll.lng, source: 'toll_anchor' };
+            tollAnchor = toll;
+            break;
           }
         }
       }
 
+      // 2. Direct exact or alias match in LOGISTICS_HUBS
+      let candidate = null;
+
+      // Check exact match first
+      for (const [key, hub] of Object.entries(LOGISTICS_HUBS)) {
+        if (cleanUpper === key) {
+          candidate = { name: `${hub.name}, ${hub.state}`, lat: hub.lat, lng: hub.lng, source: 'exact_city' };
+          break;
+        }
+        if (hub.aliases && hub.aliases.some(a => a === cleanUpper)) {
+          candidate = { name: `${hub.name}, ${hub.state}`, lat: hub.lat, lng: hub.lng, source: 'exact_alias' };
+          break;
+        }
+      }
+
+      // Check whole-word / contains match (WITHOUT dangerous 3-letter prefix slicing)
+      if (!candidate && cleanUpper.length >= 3) {
+        for (const [key, hub] of Object.entries(LOGISTICS_HUBS)) {
+          const wordRegex = new RegExp(`\\b${key}\\b`, 'i');
+          if (wordRegex.test(cleanUpper)) {
+            candidate = { name: `${hub.name}, ${hub.state}`, lat: hub.lat, lng: hub.lng, source: 'word_match' };
+            break;
+          }
+          if (hub.aliases && hub.aliases.some(a => new RegExp(`\\b${a}\\b`, 'i').test(cleanUpper))) {
+            candidate = { name: `${hub.name}, ${hub.state}`, lat: hub.lat, lng: hub.lng, source: 'word_alias' };
+            break;
+          }
+        }
+      }
+
+      // 3. Proximity Validation against Nearby Toll Anchor (The Golden Rule)
+      // If a candidate was matched, but it is > 450 km away from the confirmed toll plaza
+      // (e.g. "Kalapur" wrongly guessing "Kharagpur, West Bengal" when toll is in Maharashtra,
+      // or "Goa" guessing "Arunachal Pradesh"):
+      // Invalidate the candidate and anchor near the confirmed toll!
+      if (candidate && tollAnchor && candidate.lat && candidate.lng && tollAnchor.lat && tollAnchor.lng) {
+        const dist = haversineDistKm(candidate.lat, candidate.lng, tollAnchor.lat, tollAnchor.lng);
+        if (dist > 450) {
+          console.warn(`[Location Sanity] Rejected candidate '${candidate.name}' because it is ${Math.round(dist)}km away from confirmed toll '${tollAnchor.name}'. Anchoring to toll corridor.`);
+          candidate = null;
+        }
+      }
+
+      if (candidate) {
+        return candidate;
+      }
+
+      // 4. Fallback to Toll Plaza Anchor itself if the name sounds similar or is nearby
+      if (tollAnchor) {
+        return {
+          name: tollAnchor.name,
+          lat: tollAnchor.lat,
+          lng: tollAnchor.lng,
+          source: 'toll_proximity_anchor'
+        };
+      }
+
+      // 5. Fallback for Geocoding with the sanitized string (e.g. "Goa" instead of "Goa+1")
       return {
-        name: raw || 'Highway Corridor',
+        name: sanitized || raw || 'Highway Corridor',
         lat: null,
         lng: null,
         source: 'needs_geocoding'
@@ -1052,8 +1124,8 @@
 
         const computeRoute = async () => {
           try {
-            const firstTollPlaza = tollEntries[0]?.location || tollEntries[0]?.notes || null;
-            const lastTollPlaza = tollEntries[tollEntries.length - 1]?.location || tollEntries[tollEntries.length - 1]?.notes || null;
+            const firstTollPlaza = tollEntries[0]?.cleanDetails?.name || tollEntries[0]?.location || tollEntries[0]?.notes || null;
+            const lastTollPlaza = tollEntries[tollEntries.length - 1]?.cleanDetails?.name || tollEntries[tollEntries.length - 1]?.location || tollEntries[tollEntries.length - 1]?.notes || null;
 
             const origin = resolveLocationSmart(activeTrip.fromLocation, firstTollPlaza);
             const destination = resolveLocationSmart(activeTrip.toLocation, lastTollPlaza);
