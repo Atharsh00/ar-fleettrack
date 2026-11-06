@@ -378,6 +378,22 @@
       const mapInstanceRef = useRef(null);
       const mapLayerGroupRef = useRef(null);
 
+      // Determine if a trip is completed (has a subsequent trip entered) or active/ongoing (latest trip)
+      const getTripStatusInfo = (trip) => {
+        if (!trip) return { isLatest: false, nextTrip: null, nextTripDate: null };
+        const truckTripsAsc = trips
+          .filter(t => t.truckId === trip.truckId && t.date)
+          .sort((a, b) => a.date.localeCompare(b.date));
+        const idx = truckTripsAsc.findIndex(t => t.id === trip.id);
+        const isLatest = idx === truckTripsAsc.length - 1;
+        const nextTrip = !isLatest && idx >= 0 ? truckTripsAsc[idx + 1] : null;
+        return {
+          isLatest,
+          nextTrip,
+          nextTripDate: nextTrip ? nextTrip.date : null
+        };
+      };
+
       // Filtered Trips
       const filteredTrips = useMemo(() => {
         return trips.filter(t => (selTruck === 'all' ? true : t.truckId === selTruck));
@@ -389,22 +405,49 @@
         return trips.find(t => t.id === selTripId) || filteredTrips[0] || null;
       }, [selTripId, trips, filteredTrips]);
 
-      // Toll Entries for Active Trip (Enriched with locations and times)
+      // Active Trip Status (Completed vs In-Transit)
+      const activeTripStatus = useMemo(() => {
+        return getTripStatusInfo(activeTrip);
+      }, [activeTrip, trips]);
+
+      // Toll Entries for Active Trip (Strictly bounded by trip start date and next trip start date)
       const tollEntries = useMemo(() => {
-        if (!activeTrip) return [];
-        const tolls = expenses.filter(e => (e.tripId === activeTrip.id || (e.truckId === activeTrip.truckId && e.date === activeTrip.date)) && e.category === 'TOLL');
+        if (!activeTrip || activeTripStatus.isLatest) return [];
+        const { nextTripDate } = activeTripStatus;
+        const tolls = expenses.filter(e => {
+          if (e.category !== 'TOLL') return false;
+          if (e.truckId && e.truckId !== activeTrip.truckId) return false;
+          if (e.tripId && e.tripId === activeTrip.id) return true;
+          if (e.date) {
+            if (e.date < activeTrip.date) return false;
+            if (nextTripDate && e.date >= nextTripDate) return false;
+            return true;
+          }
+          return false;
+        });
         return [...tolls].sort((a, b) => {
           const tsA = a.timestamp || `${a.date}T${a.time || '00:00'}:00`;
           const tsB = b.timestamp || `${b.date}T${b.time || '00:00'}:00`;
           return tsA.localeCompare(tsB);
         });
-      }, [activeTrip, expenses]);
+      }, [activeTrip, activeTripStatus, expenses]);
 
-      // Diesel Entries for Active Trip
+      // Diesel Entries for Active Trip (Strictly bounded)
       const dieselEntries = useMemo(() => {
-        if (!activeTrip) return [];
-        return expenses.filter(e => (e.tripId === activeTrip.id || (e.truckId === activeTrip.truckId && e.date === activeTrip.date)) && e.category === 'DIESEL');
-      }, [activeTrip, expenses]);
+        if (!activeTrip || activeTripStatus.isLatest) return [];
+        const { nextTripDate } = activeTripStatus;
+        return expenses.filter(e => {
+          if (e.category !== 'DIESEL') return false;
+          if (e.truckId && e.truckId !== activeTrip.truckId) return false;
+          if (e.tripId && e.tripId === activeTrip.id) return true;
+          if (e.date) {
+            if (e.date < activeTrip.date) return false;
+            if (nextTripDate && e.date >= nextTripDate) return false;
+            return true;
+          }
+          return false;
+        });
+      }, [activeTrip, activeTripStatus, expenses]);
 
       // Transit Duration Calculation
       const transitDuration = useMemo(() => {
@@ -446,8 +489,9 @@
 
       // --- OSRM ROUTE CALCULATION WITH TOLL-ANCHOR SMART FALLBACK ---
       useEffect(() => {
-        if (!activeTrip) {
+        if (!activeTrip || activeTripStatus.isLatest) {
           setRouteData(null);
+          setIsLoadingRoute(false);
           return;
         }
 
@@ -539,7 +583,7 @@
 
         computeRoute();
         return () => { isMounted = false; };
-      }, [activeTrip, tollEntries]);
+      }, [activeTrip, activeTripStatus, tollEntries]);
 
       // --- RELIABLE LEAFLET MAP ENGINE (ESRI TILES - ZERO 403 BLOCKS) ---
       useEffect(() => {
@@ -764,11 +808,15 @@
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:ring-2 focus:ring-sky-500 focus:outline-none"
                 >
                   <option value="all">Summary Table (All Trips)</option>
-                  {filteredTrips.map(tr => (
-                    <option key={tr.id} value={tr.id}>
-                      {formatDate(tr.date)} | {tr.route} ({formatCurr(tr.totalRent)})
-                    </option>
-                  ))}
+                  {filteredTrips.map(tr => {
+                    const st = getTripStatusInfo(tr);
+                    return (
+                      <option key={tr.id} value={tr.id}>
+                        {st.isLatest ? '🚚 [Active / In-Transit] ' : '✅ [Completed] '}
+                        {formatDate(tr.date)} | {tr.route} ({formatCurr(tr.totalRent)})
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
             </div>
@@ -787,6 +835,15 @@
                         {trucks.find(t => t.id === activeTrip.truckId)?.registrationNumber || activeTrip.truckId}
                       </span>
                       <span className="text-xs text-slate-500 font-semibold">📅 {formatDate(activeTrip.date)}</span>
+                      {activeTripStatus.isLatest ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                          🚚 Active Leg / On Road
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          ✅ Completed Trip
+                        </span>
+                      )}
                     </div>
                     <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">
                       {activeTrip.route}
@@ -804,8 +861,38 @@
                   </button>
                 </div>
 
-                {/* 4 Telemetry Metric Boxes */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {activeTripStatus.isLatest ? (
+                  /* Active / In-Transit Notice (Analytics locked until next trip is logged) */
+                  <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-8 text-center space-y-4 shadow-xs">
+                    <div className="w-16 h-16 bg-amber-100 text-amber-800 rounded-2xl flex items-center justify-center mx-auto text-3xl shadow-inner">
+                      🚚
+                    </div>
+                    <div className="space-y-1.5 max-w-lg mx-auto">
+                      <span className="inline-block px-3 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-bold uppercase tracking-wider">
+                        Trip In Progress
+                      </span>
+                      <h3 className="text-xl font-extrabold text-slate-900 tracking-tight">
+                        Analytics Finalize Once Next Trip is Entered
+                      </h3>
+                      <p className="text-xs text-slate-600 leading-relaxed">
+                        This is currently the latest trip logged for <strong>{trucks.find(t => t.id === activeTrip.truckId)?.registrationNumber || activeTrip.truckId}</strong>.
+                        To guarantee 100% boundary accuracy and ensure subsequent repositioning or return tolls do not bleed into this trip, complete OSRM telemetry, exact toll timelines, and diesel analytics lock in once the subsequent trip entry is logged.
+                      </p>
+                    </div>
+
+                    <div className="pt-2 flex flex-wrap justify-center gap-2">
+                      <button
+                        onClick={() => setSelTripId('all')}
+                        className="px-4 py-2 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold rounded-xl border border-slate-300 shadow-xs transition"
+                      >
+                        Browse Completed Trips Summary
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* 4 Telemetry Metric Boxes */}
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                   <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
                     <span className="text-[11px] font-bold text-sky-600 uppercase tracking-wider block mb-1">🛣️ Highway Distance</span>
                     <div className="text-2xl font-extrabold text-slate-900 font-mono">
@@ -986,6 +1073,8 @@
                     </div>
                   </div>
                 </div>
+              </>
+            )}
               </div>
             ) : (
               /* All Trips Summary View */
@@ -1001,33 +1090,48 @@
                       <tr>
                         <th className="p-3">Date</th>
                         <th className="p-3">Vehicle</th>
+                        <th className="p-3">Status</th>
                         <th className="p-3">Corridor Route</th>
                         <th className="p-3 text-right">Freight Rent</th>
                         <th className="p-3 text-center">Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {filteredTrips.map(tr => (
-                        <tr key={tr.id} className="hover:bg-slate-50">
-                          <td className="p-3 font-mono text-slate-600 whitespace-nowrap">{formatDate(tr.date)}</td>
-                          <td className="p-3 font-mono text-sky-700 font-bold whitespace-nowrap">
-                            {trucks.find(t => t.id === tr.truckId)?.registrationNumber || tr.truckId}
-                          </td>
-                          <td className="p-3 font-semibold text-slate-900">{tr.route}</td>
-                          <td className="p-3 text-right font-mono text-slate-900 font-bold whitespace-nowrap">
-                            {formatCurr(tr.totalRent)}
-                          </td>
-                          <td className="p-3 text-center whitespace-nowrap">
-                            <button
-                              type="button"
-                              onClick={() => setSelTripId(tr.id)}
-                              className="px-3.5 py-1.5 rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 font-bold text-xs transition shadow-xs"
-                            >
-                              Inspect Route & Tolls ↗
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                      {filteredTrips.map(tr => {
+                        const st = getTripStatusInfo(tr);
+                        return (
+                          <tr key={tr.id} className="hover:bg-slate-50">
+                            <td className="p-3 font-mono text-slate-600 whitespace-nowrap">{formatDate(tr.date)}</td>
+                            <td className="p-3 font-mono text-sky-700 font-bold whitespace-nowrap">
+                              {trucks.find(t => t.id === tr.truckId)?.registrationNumber || tr.truckId}
+                            </td>
+                            <td className="p-3 whitespace-nowrap">
+                              {st.isLatest ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                  🚚 In-Transit
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  ✅ Completed
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 font-semibold text-slate-900">{tr.route}</td>
+                            <td className="p-3 text-right font-mono text-slate-900 font-bold whitespace-nowrap">
+                              {formatCurr(tr.totalRent)}
+                            </td>
+                            <td className="p-3 text-center whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => setSelTripId(tr.id)}
+                                className="px-3.5 py-1.5 rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 font-bold text-xs transition shadow-xs"
+                              >
+                                {st.isLatest ? 'Inspect Trip ↗' : 'Inspect Route & Tolls ↗'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
