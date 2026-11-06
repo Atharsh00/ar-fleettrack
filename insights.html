@@ -22,16 +22,6 @@
           fontFamily: {
             sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
             mono: ['"JetBrains Mono"', 'monospace'],
-          },
-          colors: {
-            brand: {
-              50: '#F0F9FF',
-              100: '#E0F2FE',
-              500: '#0284C7',
-              600: '#0369A1',
-              700: '#075985',
-              900: '#0C4A6E',
-            }
           }
         }
       }
@@ -54,25 +44,30 @@
     ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
 
-    /* Leaflet Light Theme Styling */
-    .leaflet-container {
-      background: #F8FAFC !important;
+    /* Enforce Map strict containment so it NEVER spills or bleeds */
+    .map-box {
+      position: relative !important;
+      overflow: hidden !important;
+      border-radius: 14px !important;
+      z-index: 10 !important;
+    }
+    .map-box .leaflet-container {
+      width: 100% !important;
+      height: 100% !important;
+      background: #E2E8F0 !important;
       font-family: '"Plus Jakarta Sans"', sans-serif !important;
     }
+
+    /* Popup Styling */
     .leaflet-popup-content-wrapper {
       background: #FFFFFF !important;
       color: #0F172A !important;
       border: 1px solid #E2E8F0 !important;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15) !important;
       border-radius: 12px !important;
     }
-    .leaflet-popup-tip {
-      background: #FFFFFF !important;
-    }
-    .leaflet-popup-content {
-      margin: 12px 14px !important;
-      line-height: 1.4 !important;
-    }
+    .leaflet-popup-tip { background: #FFFFFF !important; }
+    .leaflet-popup-content { margin: 12px 14px !important; line-height: 1.4 !important; }
   </style>
 </head>
 <body class="bg-[#F8FAFC] text-slate-800 font-sans min-h-screen selection:bg-sky-100 selection:text-sky-900">
@@ -83,44 +78,31 @@
 
     // --- COMPREHENSIVE INDIAN LOGISTICS HUB & FUZZY ALIAS DICTIONARY ---
     const LOGISTICS_HUBS = {
-      // Tamil Nadu
       'MADURAI': { name: 'Madurai', state: 'Tamil Nadu', lat: 9.9252, lng: 78.1198, aliases: ['MDU', 'MAD'] },
       'COIMBATORE': { name: 'Coimbatore', state: 'Tamil Nadu', lat: 11.0168, lng: 76.9558, aliases: ['COI', 'CBE', 'COIM', 'KOVAI'] },
       'CHENNAI': { name: 'Chennai', state: 'Tamil Nadu', lat: 13.0827, lng: 80.2707, aliases: ['MAA', 'CHN', 'MADRAS'] },
       'TRICHY': { name: 'Tiruchirappalli', state: 'Tamil Nadu', lat: 10.7905, lng: 78.7047, aliases: ['TPJ', 'TRICHY'] },
       'SALEM': { name: 'Salem', state: 'Tamil Nadu', lat: 11.6643, lng: 78.1460, aliases: ['SA'] },
-
-      // West Bengal
       'KOLKATA': { name: 'Kolkata', state: 'West Bengal', lat: 22.5726, lng: 88.3639, aliases: ['KOL', 'KOLK', 'CALCUTTA', 'CCU'] },
       'DURGAPUR': { name: 'Durgapur', state: 'West Bengal', lat: 23.5204, lng: 87.3119, aliases: ['DGP'] },
       'SILIGURI': { name: 'Siliguri', state: 'West Bengal', lat: 26.7271, lng: 88.3953, aliases: ['IXB'] },
-
-      // Karnataka
       'BENGALURU': { name: 'Bengaluru', state: 'Karnataka', lat: 12.9716, lng: 77.5946, aliases: ['BLR', 'BNG', 'BANGALORE', 'BLORE', 'BENGALURU DC'] },
       'BELGAUM': { name: 'Belagavi', state: 'Karnataka', lat: 15.8497, lng: 74.4977, aliases: ['IXG', 'BELGAUM BYPASS', 'BELGAUM'] },
       'MANGALORE': { name: 'Mangaluru', state: 'Karnataka', lat: 12.9141, lng: 74.8560, aliases: ['IXE', 'MANGALORE'] },
       'HUBLI': { name: 'Hubballi', state: 'Karnataka', lat: 15.3647, lng: 75.1240, aliases: ['HBX', 'HUBLI'] },
-
-      // Maharashtra
       'MUMBAI': { name: 'Mumbai', state: 'Maharashtra', lat: 19.0760, lng: 72.8777, aliases: ['BOM', 'MUM', 'BOMBAY', 'MUMBAI JNPT', 'JNPT'] },
       'BHIWANDI': { name: 'Bhiwandi', state: 'Maharashtra', lat: 19.2967, lng: 73.0631, aliases: ['BHIWANDI HUB', 'BHW'] },
       'PUNE': { name: 'Pune', state: 'Maharashtra', lat: 18.5204, lng: 73.8567, aliases: ['PNQ', 'PUN', 'PUNE MIDC', 'PUNE CHAKAN', 'CHAKAN'] },
       'SOLAPUR': { name: 'Solapur', state: 'Maharashtra', lat: 17.6599, lng: 75.9064, aliases: ['SOL', 'SOLAPUR MIDC'] },
       'NAGPUR': { name: 'Nagpur', state: 'Maharashtra', lat: 21.1458, lng: 79.0882, aliases: ['NAG', 'NAGPUR YARD'] },
-
-      // Delhi & North
       'DELHI': { name: 'Delhi NCR', state: 'Delhi', lat: 28.6139, lng: 77.2090, aliases: ['DEL', 'NCR', 'DELHI NCR', 'NEW DELHI'] },
       'JAIPUR': { name: 'Jaipur', state: 'Rajasthan', lat: 26.9124, lng: 75.7873, aliases: ['JAI', 'JAIPUR DEPOT'] },
       'VARANASI': { name: 'Varanasi', state: 'Uttar Pradesh', lat: 25.3176, lng: 82.9739, aliases: ['VNS', 'VARANASI HUB', 'BANARAS'] },
       'LUCKNOW': { name: 'Lucknow', state: 'Uttar Pradesh', lat: 26.8467, lng: 80.9462, aliases: ['LKO'] },
       'JAMSHEDPUR': { name: 'Jamshedpur', state: 'Jharkhand', lat: 22.8046, lng: 86.2029, aliases: ['JAMSHEDPUR TISCO', 'TISCO', 'IXW'] },
-
-      // Gujarat
       'SURAT': { name: 'Surat', state: 'Gujarat', lat: 21.1702, lng: 72.8311, aliases: ['SUR', 'SURAT RING ROAD'] },
       'AHMEDABAD': { name: 'Ahmedabad', state: 'Gujarat', lat: 23.0225, lng: 72.5714, aliases: ['AMD', 'AHM', 'AHMEDABAD YARD'] },
       'MUNDRA': { name: 'Mundra', state: 'Gujarat', lat: 22.8394, lng: 69.7042, aliases: ['MUNDRA PORT'] },
-
-      // Telangana & Andhra Pradesh
       'HYDERABAD': { name: 'Hyderabad', state: 'Telangana', lat: 17.3850, lng: 78.4867, aliases: ['HYD', 'HYDERABAD HUB'] },
       'VIJAYAWADA': { name: 'Vijayawada', state: 'Andhra Pradesh', lat: 16.5062, lng: 80.6480, aliases: ['BZA'] },
       'VISAKHAPATNAM': { name: 'Visakhapatnam', state: 'Andhra Pradesh', lat: 17.6868, lng: 83.2185, aliases: ['VTZ', 'VIZAG', 'VZG'] }
@@ -133,7 +115,7 @@
       'PATAS': { lat: 18.4350, lng: 74.4180, name: 'Patas Toll Plaza (NH-65 Pune-Solapur)' },
       'MOHOL': { lat: 17.8100, lng: 75.6400, name: 'Mohol Toll Plaza (Solapur Entry)' },
       'KHED-SHIVAPUR': { lat: 18.3540, lng: 73.8640, name: 'Khed-Shivapur Toll Plaza (NH-48)' },
-      'TASAOWADE': { lat: 17.3200, lng: 74.1700, name: 'Tasawade Toll Plaza (Karad)' },
+      'TASAWADE': { lat: 17.3200, lng: 74.1700, name: 'Tasawade Toll Plaza (Karad)' },
       'KOGNOLI': { lat: 16.5700, lng: 74.4500, name: 'Kognoli Toll Plaza (MH-KA Border)' },
       'CHALAGERI': { lat: 14.6500, lng: 75.7600, name: 'Chalageri Toll Plaza (Haveri)' },
       'NELAMANGALA': { lat: 13.0988, lng: 77.3916, name: 'Nelamangala Toll Plaza (Bengaluru)' },
@@ -192,7 +174,6 @@
         }
       }
 
-      // 4. Default Geocoding Fallback
       return {
         name: raw || 'Highway Corridor',
         lat: null,
@@ -292,36 +273,35 @@
         };
         return [
           // TRP-1
-          { id: 'exp-1-t1', date: getRelDate(2), time: '06:15 AM', location: 'Khalapur, MH', timestamp: `${getRelDate(2)}T06:15:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 480, notes: 'Khalapur Toll Plaza (Mumbai-Pune Expressway)' },
-          { id: 'exp-1-t2', date: getRelDate(2), time: '08:45 AM', location: 'Talegaon, MH', timestamp: `${getRelDate(2)}T08:45:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 320, notes: 'Talegaon Toll Plaza' },
-          { id: 'exp-1-d1', date: getRelDate(2), time: '10:15 AM', location: 'Chakan IOCL Highway', timestamp: `${getRelDate(2)}T10:15:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'DIESEL', amount: 15200, notes: 'Diesel 160L IOCL Highway Chakan' },
-          { id: 'exp-1-t3', date: getRelDate(2), time: '02:20 PM', location: 'Patas, NH-65', timestamp: `${getRelDate(2)}T14:20:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 260, notes: 'Patas Toll Plaza (NH-65)' },
-          { id: 'exp-1-t4', date: getRelDate(2), time: '07:45 PM', location: 'Mohol, Solapur', timestamp: `${getRelDate(2)}T19:45:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 195, notes: 'Mohol Toll Plaza' },
+          { id: 'exp-1-t1', date: getRelDate(2), time: '06:15 AM', location: 'Khalapur Toll Plaza', timestamp: `${getRelDate(2)}T06:15:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 480, notes: 'Khalapur Toll Plaza (Mumbai-Pune Expressway)' },
+          { id: 'exp-1-t2', date: getRelDate(2), time: '08:45 AM', location: 'Talegaon Toll Plaza', timestamp: `${getRelDate(2)}T08:45:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 320, notes: 'Talegaon Toll Plaza' },
+          { id: 'exp-1-d1', date: getRelDate(2), time: '10:15 AM', location: 'IOCL Chakan Highway', timestamp: `${getRelDate(2)}T10:15:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'DIESEL', amount: 15200, notes: 'Diesel 160L IOCL Highway Chakan' },
+          { id: 'exp-1-t3', date: getRelDate(2), time: '02:20 PM', location: 'Patas Toll Plaza (NH-65)', timestamp: `${getRelDate(2)}T14:20:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 260, notes: 'Patas Toll Plaza (NH-65)' },
+          { id: 'exp-1-t4', date: getRelDate(2), time: '07:45 PM', location: 'Mohol Toll Plaza', timestamp: `${getRelDate(2)}T19:45:00`, truckId: 'trk-1', tripId: 'trp-1', category: 'TOLL', amount: 195, notes: 'Mohol Toll Plaza (Solapur Entry)' },
 
           // TRP-4
-          { id: 'exp-4-t1', date: getRelDate(12), time: '05:30 AM', location: 'Khed-Shivapur, NH-48', timestamp: `${getRelDate(12)}T05:30:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 650, notes: 'Khed-Shivapur Toll Plaza (NH-48)' },
-          { id: 'exp-4-t2', date: getRelDate(12), time: '11:15 AM', location: 'Tasawade, Karad', timestamp: `${getRelDate(12)}T11:15:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 420, notes: 'Tasawade Toll Plaza (Karad)' },
-          { id: 'exp-4-d1', date: getRelDate(12), time: '01:00 PM', location: 'BPCL Kolhapur', timestamp: `${getRelDate(12)}T13:00:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'DIESEL', amount: 20900, notes: 'Diesel 220L BPCL Kolhapur Highway' },
-          { id: 'exp-4-t3', date: getRelDate(12), time: '04:45 PM', location: 'Kognoli (Border)', timestamp: `${getRelDate(12)}T16:45:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 380, notes: 'Kognoli Toll Plaza (Karnataka Border)' },
-          { id: 'exp-4-t4', date: getRelDate(13), time: '02:10 AM', location: 'Chalageri, Haveri', timestamp: `${getRelDate(13)}T02:10:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 410, notes: 'Chalageri Toll Plaza (Haveri)' },
-          { id: 'exp-4-d2', date: getRelDate(13), time: '05:30 AM', location: 'HPCL Chitradurga', timestamp: `${getRelDate(13)}T05:30:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'DIESEL', amount: 13300, notes: 'Diesel 140L HPCL Chitradurga Bypass' },
-          { id: 'exp-4-t5', date: getRelDate(13), time: '10:40 AM', location: 'Nelamangala, BLR', timestamp: `${getRelDate(13)}T10:40:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 280, notes: 'Nelamangala Toll Plaza (Bengaluru)' },
+          { id: 'exp-4-t1', date: getRelDate(12), time: '05:30 AM', location: 'Khed-Shivapur Toll Plaza', timestamp: `${getRelDate(12)}T05:30:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 650, notes: 'Khed-Shivapur Toll Plaza (NH-48)' },
+          { id: 'exp-4-t2', date: getRelDate(12), time: '11:15 AM', location: 'Tasawade Toll Plaza (Karad)', timestamp: `${getRelDate(12)}T11:15:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 420, notes: 'Tasawade Toll Plaza (Karad)' },
+          { id: 'exp-4-d1', date: getRelDate(12), time: '01:00 PM', location: 'BPCL Kolhapur Highway', timestamp: `${getRelDate(12)}T13:00:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'DIESEL', amount: 20900, notes: 'Diesel 220L BPCL Kolhapur Highway' },
+          { id: 'exp-4-t3', date: getRelDate(12), time: '04:45 PM', location: 'Kognoli Toll Plaza (Border)', timestamp: `${getRelDate(12)}T16:45:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 380, notes: 'Kognoli Toll Plaza (Karnataka Border)' },
+          { id: 'exp-4-t4', date: getRelDate(13), time: '02:10 AM', location: 'Chalageri Toll Plaza (Haveri)', timestamp: `${getRelDate(13)}T02:10:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 410, notes: 'Chalageri Toll Plaza (Haveri)' },
+          { id: 'exp-4-d2', date: getRelDate(13), time: '05:30 AM', location: 'HPCL Chitradurga Bypass', timestamp: `${getRelDate(13)}T05:30:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'DIESEL', amount: 13300, notes: 'Diesel 140L HPCL Chitradurga Bypass' },
+          { id: 'exp-4-t5', date: getRelDate(13), time: '10:40 AM', location: 'Nelamangala Toll Plaza', timestamp: `${getRelDate(13)}T10:40:00`, truckId: 'trk-1', tripId: 'trp-4', category: 'TOLL', amount: 280, notes: 'Nelamangala Toll Plaza (Bengaluru Entry)' },
 
           // TRP-7
-          { id: 'exp-7-t1', date: getRelDate(18), time: '04:15 AM', location: 'Samayanallur, Madurai', timestamp: `${getRelDate(18)}T04:15:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 180, notes: 'Samayanallur Toll Plaza (Madurai)' },
-          { id: 'exp-7-t2', date: getRelDate(18), time: '10:30 AM', location: 'Boothakudi, Trichy', timestamp: `${getRelDate(18)}T10:30:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 240, notes: 'Boothakudi Toll Plaza (Trichy)' },
-          { id: 'exp-7-d1', date: getRelDate(18), time: '01:00 PM', location: 'IOCL Ulundurpet', timestamp: `${getRelDate(18)}T13:00:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'DIESEL', amount: 23750, notes: 'Diesel 250L IOCL Ulundurpet' },
-          { id: 'exp-7-t3', date: getRelDate(18), time: '09:15 PM', location: 'Sullurupeta, Nellore', timestamp: `${getRelDate(18)}T21:15:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 360, notes: 'Sullurupeta Toll Plaza (Nellore)' },
-          { id: 'exp-7-t4', date: getRelDate(19), time: '08:00 AM', location: 'Bollapalli, Vijayawada', timestamp: `${getRelDate(19)}T08:00:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 410, notes: 'Bollapalli Toll Plaza (Vijayawada)' },
+          { id: 'exp-7-t1', date: getRelDate(18), time: '04:15 AM', location: 'Samayanallur Toll Plaza', timestamp: `${getRelDate(18)}T04:15:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 180, notes: 'Samayanallur Toll Plaza (Madurai)' },
+          { id: 'exp-7-t2', date: getRelDate(18), time: '10:30 AM', location: 'Boothakudi Toll Plaza', timestamp: `${getRelDate(18)}T10:30:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 240, notes: 'Boothakudi Toll Plaza (Trichy)' },
+          { id: 'exp-7-d1', date: getRelDate(18), time: '01:00 PM', location: 'IOCL Ulundurpet Bunk', timestamp: `${getRelDate(18)}T13:00:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'DIESEL', amount: 23750, notes: 'Diesel 250L IOCL Ulundurpet' },
+          { id: 'exp-7-t3', date: getRelDate(18), time: '09:15 PM', location: 'Sullurupeta Toll Plaza', timestamp: `${getRelDate(18)}T21:15:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 360, notes: 'Sullurupeta Toll Plaza (Nellore)' },
+          { id: 'exp-7-t4', date: getRelDate(19), time: '08:00 AM', location: 'Bollapalli Toll Plaza', timestamp: `${getRelDate(19)}T08:00:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 410, notes: 'Bollapalli Toll Plaza (Vijayawada)' },
           { id: 'exp-7-d2', date: getRelDate(19), time: '02:30 PM', location: 'BPCL Rajahmundry', timestamp: `${getRelDate(19)}T14:30:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'DIESEL', amount: 26600, notes: 'Diesel 280L BPCL Rajahmundry' },
-          { id: 'exp-7-t5', date: getRelDate(20), time: '07:30 AM', location: 'Sunakhala, Odisha', timestamp: `${getRelDate(20)}T07:30:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 390, notes: 'Sunakhala Toll Plaza (Odisha)' },
-          { id: 'exp-7-t6', date: getRelDate(20), time: '08:45 PM', location: 'Dankuni, Kolkata', timestamp: `${getRelDate(20)}T20:45:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 450, notes: 'Dankuni Toll Plaza (Kolkata)' }
+          { id: 'exp-7-t5', date: getRelDate(20), time: '07:30 AM', location: 'Sunakhala Toll Plaza', timestamp: `${getRelDate(20)}T07:30:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 390, notes: 'Sunakhala Toll Plaza (Odisha)' },
+          { id: 'exp-7-t6', date: getRelDate(20), time: '08:45 PM', location: 'Dankuni Toll Plaza', timestamp: `${getRelDate(20)}T20:45:00`, truckId: 'trk-1', tripId: 'trp-7', category: 'TOLL', amount: 450, notes: 'Dankuni Toll Plaza (Kolkata)' }
         ];
       });
 
       // UI States
       const [selTruck, setSelTruck] = useState('trk-1');
-      const [periodPreset, setPeriodPreset] = useState('all');
       const [selTripId, setSelTripId] = useState('trp-1');
       const [isMapMaximized, setIsMapMaximized] = useState(false);
 
@@ -416,11 +396,9 @@
 
         const computeRoute = async () => {
           try {
-            // First Toll and Last Toll names as fallbacks
             const firstTollPlaza = tollEntries[0]?.notes || null;
             const lastTollPlaza = tollEntries[tollEntries.length - 1]?.notes || null;
 
-            // Resolve Origin, Drops, Destination
             const origin = resolveLocationSmart(activeTrip.fromLocation, firstTollPlaza);
             const destination = resolveLocationSmart(activeTrip.toLocation, lastTollPlaza);
             const drops = (activeTrip.additionalDrops || []).map(d => resolveLocationSmart(d));
@@ -440,11 +418,10 @@
               return;
             }
 
-            // Resolve any unmapped coordinates via Nominatim
             const coordsList = [];
             for (const wp of waypoints) {
               if (wp.lat && wp.lng) {
-                coordsList.push([wp.lng, wp.lat]); // OSRM lng, lat
+                coordsList.push([wp.lng, wp.lat]);
               } else {
                 try {
                   const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(wp.name + ', India')}&format=json&limit=1`);
@@ -462,7 +439,6 @@
               }
             }
 
-            // Query OSRM Highway Engine
             const coordStr = coordsList.map(c => `${c[0]},${c[1]}`).join(';');
             const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
 
@@ -492,10 +468,10 @@
                 setIsLoadingRoute(false);
               }
             } else {
-              throw new Error('OSRM Route not calculated');
+              throw new Error('OSRM Route calculation error');
             }
           } catch(err) {
-            console.warn('Route computation note:', err);
+            console.warn('Route calculation notice:', err);
             if (isMounted) setIsLoadingRoute(false);
           }
         };
@@ -504,21 +480,26 @@
         return () => { isMounted = false; };
       }, [activeTrip, tollEntries]);
 
-      // --- LEAFLET MAP ENGINE WITH RELIABLE OPENSTREETMAP TILES ---
+      // --- RELIABLE LEAFLET MAP ENGINE (CARTO/ESRI TILES - 100% UNBLOCKED ON FILE://) ---
       useEffect(() => {
-        if (!mapContainerRef.current) return;
+        // Only run map if we are in Single Trip mode
+        if (selTripId === 'all' || !mapContainerRef.current) {
+          return;
+        }
 
+        // If map does not exist, initialize it cleanly
         if (!mapInstanceRef.current) {
           const map = L.map(mapContainerRef.current, {
             center: [20.5937, 78.9629],
             zoom: 5,
-            zoomControl: true
+            zoomControl: true,
+            scrollWheelZoom: true
           });
 
-          // Official OpenStreetMap Vector Tiles (100% Free, Zero API Keys, Reliable)
-          L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          // ESRI World Street Map: 100% Free, NO API keys, NO "403 blocked" on file:// URLs
+          L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
             maxZoom: 19,
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            attribution: 'Tiles &copy; Esri &mdash; National Geographic, DeLorme, NAVTEQ'
           }).addTo(map);
 
           mapLayerGroupRef.current = L.layerGroup().addTo(map);
@@ -529,12 +510,14 @@
         const layerGroup = mapLayerGroupRef.current;
         layerGroup.clearLayers();
 
-        // Refresh Leaflet size on viewport adjustments
-        setTimeout(() => map.invalidateSize(), 200);
+        // Refresh container dimensions
+        setTimeout(() => {
+          if (map) map.invalidateSize();
+        }, 150);
 
         if (!routeData || !routeData.geometry) return;
 
-        // Draw Deep Royal Blue Route Polyline
+        // Draw Deep Blue Highway Route Polyline
         const routeLine = L.geoJSON(routeData.geometry, {
           style: {
             color: '#0284C7',
@@ -549,7 +532,7 @@
         const makePin = (label, bgClass, emoji) => L.divIcon({
           className: 'custom-pin',
           html: `
-            <div class="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold text-white shadow-md border ${bgClass} whitespace-nowrap transform -translate-x-1/2 -translate-y-1/2">
+            <div class="flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold text-white shadow-md border ${bgClass} whitespace-nowrap transform -translate-x-1/2 -translate-y-1/2">
               <span>${emoji}</span>
               <span>${label}</span>
             </div>
@@ -557,7 +540,7 @@
           iconSize: [0, 0]
         });
 
-        // 1. Origin Pin
+        // 1. Origin
         if (routeData.waypoints[0]) {
           const o = routeData.waypoints[0];
           layerGroup.addLayer(
@@ -571,11 +554,11 @@
           const d = routeData.waypoints[i];
           layerGroup.addLayer(
             L.marker([d.lat, d.lng], { icon: makePin(d.name.split(',')[0], 'bg-sky-600 border-sky-500', '🔵') })
-              .bindPopup(`<strong>Drop Stop:</strong> ${d.name}`)
+              .bindPopup(`<strong>Drop:</strong> ${d.name}`)
           );
         }
 
-        // 3. Destination Pin
+        // 3. Destination
         if (routeData.waypoints.length > 1) {
           const dest = routeData.waypoints[routeData.waypoints.length - 1];
           layerGroup.addLayer(
@@ -597,7 +580,7 @@
             const tollIcon = L.divIcon({
               className: 'toll-badge',
               html: `
-                <div class="w-7 h-7 rounded-full bg-amber-500 border-2 border-white flex items-center justify-center text-slate-900 font-bold text-xs shadow-md transform -translate-x-1/2 -translate-y-1/2 hover:scale-125 transition" title="${toll.notes}">
+                <div class="w-6 h-6 rounded-full bg-amber-500 border-2 border-white flex items-center justify-center text-slate-900 font-bold text-xs shadow-md transform -translate-x-1/2 -translate-y-1/2 hover:scale-125 transition" title="${toll.notes}">
                   ${idx + 1}
                 </div>
               `,
@@ -618,9 +601,16 @@
           });
         }
 
-        // Fit map bounds smoothly
-        map.fitBounds(routeLine.getBounds(), { padding: [40, 40] });
-      }, [routeData, tollEntries, isMapMaximized]);
+        map.fitBounds(routeLine.getBounds(), { padding: [35, 35] });
+      }, [routeData, tollEntries, isMapMaximized, selTripId]);
+
+      // Handle clean map instance teardown when navigating to "All Trips"
+      useEffect(() => {
+        if (selTripId === 'all' && mapInstanceRef.current) {
+          mapInstanceRef.current.remove();
+          mapInstanceRef.current = null;
+        }
+      }, [selTripId]);
 
       // Metrics
       const totalTollsAmt = useMemo(() => tollEntries.reduce((s, e) => s + Number(e.amount || 0), 0), [tollEntries]);
@@ -639,22 +629,22 @@
 
       return (
         <div className="min-h-screen flex flex-col bg-[#F8FAFC]">
-          {/* Top Brand Header (Light Clean Theme) */}
+          {/* Top Brand Header */}
           <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
             <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <a href="./index.html" className="flex items-center gap-2.5 group">
-                  <div className="w-10 h-10 rounded-xl bg-sky-600 flex items-center justify-center text-white font-black text-sm shadow-md group-hover:bg-sky-700 transition">
+                  <div className="w-9 h-9 rounded-xl bg-sky-600 flex items-center justify-center text-white font-black text-sm shadow-md group-hover:bg-sky-700 transition">
                     AR
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="text-xl font-extrabold text-slate-900 tracking-tight">AR Insights</span>
+                      <span className="text-lg font-extrabold text-slate-900 tracking-tight">AR Insights</span>
                       <span className="px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 text-[10px] font-bold">
                         Telemetry v1.0
                       </span>
                     </div>
-                    <p className="text-xs text-slate-500 hidden sm:block">Route Telemetry, Toll Intelligence & Fuel Consumption</p>
+                    <p className="text-[11px] text-slate-500 hidden sm:block">Route Telemetry, Toll Timelines & Fuel Consumption</p>
                   </div>
                 </a>
               </div>
@@ -668,7 +658,7 @@
                 )}
                 <a
                   href="./index.html"
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-200 transition shadow-sm flex items-center gap-1.5"
+                  className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-200 transition shadow-xs flex items-center gap-1.5"
                 >
                   <span>←</span>
                   <span>Return to FleetTrack</span>
@@ -677,8 +667,8 @@
             </div>
           </header>
 
-          {/* Clean Light Control Bar */}
-          <div className="bg-white border-b border-slate-200 px-4 py-3 sticky top-[65px] z-20 shadow-xs">
+          {/* Control Bar */}
+          <div className="bg-white border-b border-slate-200 px-4 py-3 sticky top-[61px] z-20 shadow-xs">
             <div className="max-w-7xl mx-auto flex flex-wrap items-center gap-3">
               {/* Vehicle Dropdown */}
               <div className="flex-1 min-w-[200px]">
@@ -722,10 +712,10 @@
 
             {activeTrip && selTripId !== 'all' ? (
               <div className="space-y-6">
-                {/* Active Trip Dossier Header */}
+                {/* Active Trip Header */}
                 <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
                   <div>
-                    <div className="flex items-center gap-2 mb-1.5">
+                    <div className="flex items-center gap-2 mb-1">
                       <span className="px-2.5 py-1 rounded-md bg-sky-100 text-sky-800 font-bold text-xs font-mono">
                         {trucks.find(t => t.id === activeTrip.truckId)?.registrationNumber || activeTrip.truckId}
                       </span>
@@ -747,9 +737,8 @@
                   </button>
                 </div>
 
-                {/* 4 Light-Themed Telemetry Metric Boxes */}
+                {/* 4 Telemetry Metric Boxes */}
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                  {/* Highway Distance */}
                   <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
                     <span className="text-[11px] font-bold text-sky-600 uppercase tracking-wider block mb-1">🛣️ Highway Distance</span>
                     <div className="text-2xl font-extrabold text-slate-900 font-mono">
@@ -758,7 +747,6 @@
                     <span className="text-[11px] text-slate-500 mt-1 block">National Highway routing</span>
                   </div>
 
-                  {/* Toll-to-Toll Duration */}
                   <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
                     <span className="text-[11px] font-bold text-amber-600 uppercase tracking-wider block mb-1">⏱️ Toll Transit Time</span>
                     <div className="text-2xl font-extrabold text-slate-900 font-mono">
@@ -769,7 +757,6 @@
                     </span>
                   </div>
 
-                  {/* Fuel Mileage */}
                   <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
                     <span className="text-[11px] font-bold text-purple-600 uppercase tracking-wider block mb-1">⛽ Fuel Mileage</span>
                     <div className="text-2xl font-extrabold text-slate-900 font-mono">
@@ -780,7 +767,6 @@
                     </span>
                   </div>
 
-                  {/* Rolling Speed */}
                   <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
                     <span className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider block mb-1">⚡ Average Speed</span>
                     <div className="text-2xl font-extrabold text-emerald-600 font-mono">
@@ -798,21 +784,19 @@
                       <h3 className="font-bold text-slate-900 text-sm">Interactive Road Route & Toll Plazas</h3>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setIsMapMaximized(!isMapMaximized)}
-                        className="px-3 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-700 font-bold rounded-lg text-xs border border-sky-200 transition flex items-center gap-1.5 shadow-xs"
-                      >
-                        <span>{isMapMaximized ? '🗗' : '⛶'}</span>
-                        <span>{isMapMaximized ? 'Minimize Map' : 'Maximize Map'}</span>
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsMapMaximized(!isMapMaximized)}
+                      className="px-3 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-700 font-bold rounded-lg text-xs border border-sky-200 transition flex items-center gap-1.5 shadow-xs"
+                    >
+                      <span>{isMapMaximized ? '🗗' : '⛶'}</span>
+                      <span>{isMapMaximized ? 'Minimize Map' : 'Maximize Map'}</span>
+                    </button>
                   </div>
 
-                  {/* Standard or Maximized Map Container */}
-                  <div className={`relative rounded-xl overflow-hidden border border-slate-200 transition-all duration-300 ${
-                    isMapMaximized ? 'fixed inset-4 z-50 bg-white shadow-2xl p-2' : ''
+                  {/* Strictly Contained Map Box (Never spills out when scrolling) */}
+                  <div className={`map-box border border-slate-200 transition-all duration-300 ${
+                    isMapMaximized ? 'fixed inset-4 z-50 bg-white shadow-2xl p-2 !h-[calc(100vh-32px)]' : 'h-[420px] w-full'
                   }`}>
                     {isMapMaximized && (
                       <div className="absolute top-4 right-4 z-[1000]">
@@ -825,10 +809,7 @@
                         </button>
                       </div>
                     )}
-                    <div
-                      ref={mapContainerRef}
-                      style={{ height: isMapMaximized ? 'calc(100vh - 48px)' : '420px', width: '100%' }}
-                    ></div>
+                    <div ref={mapContainerRef} className="w-full h-full"></div>
                   </div>
                 </div>
 
@@ -984,7 +965,7 @@
           <footer className="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500 mt-auto">
             <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
               <span className="font-semibold text-slate-600">AR Insights Telemetry</span>
-              <span>OpenStreetMap & OSRM Engine</span>
+              <span>Reliable World Street Routing Engine</span>
             </div>
           </footer>
         </div>
