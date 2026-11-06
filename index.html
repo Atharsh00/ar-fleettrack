@@ -218,45 +218,76 @@
       return idB.localeCompare(idA);
     };
 
-    // Extract Toll Plaza Name from transaction notes
+    // Extract Toll Plaza Name from transaction notes or alert email text
     const extractPlazaNameFromText = (text) => {
       if (!text) return null;
-      // 1. Explicit labeled toll/fee plaza: e.g. "Toll Plaza: KHALAPUR", "Fee Plaza : Khed-Shivapur Toll Plaza (NH-48)"
-      const plazaMatch = text.match(/(?:toll\s*plaza|fee\s*plaza|plaza\s*name|plaza)[:\s\-]+([A-Za-z0-9\s\-\.\/\(\)]+?)(?:\s*(?:\[|dated|on\s*\d|ref|txn|for\s*vehicle|$))/i);
-      if (plazaMatch && plazaMatch[1].trim()) {
-        let name = plazaMatch[1].trim().replace(/,\s*$/, '');
-        if (!name.toLowerCase().includes('plaza') && !name.toLowerCase().includes('toll')) {
-          name = `${name} Toll Plaza`;
+
+      // Stop words that indicate the end of plaza name in typical bank notification emails
+      const boundary = '(?=\\s*(?:[\\|,;]\\s*|\\.\\s+|(?:at\\s+)?(?:vehicle|vrn|reg|tag|date|time|txn|trans|ref|urn|rrn|amt|amount|inr|rs|fee|balance|bal|lane|acct|account|avail|available|dated|on\\s*\\d|for\\s*vehicle|\\[|$)))';
+
+      // 1. Explicit labeled toll / fee plaza: "Plaza Name : ATTIBELE", "Toll Plaza: KHALAPUR", "Fee Plaza : Khed-Shivapur"
+      const labelMatch = text.match(new RegExp('(?:toll\\s*plaza|fee\\s*plaza|plaza\\s*name|toll\\s*name|plaza)\\s*[:=\\-]+\\s*([A-Za-z0-9\\s\\-\\.\\/\\(\\)]+?)' + boundary, 'i'));
+      if (labelMatch && labelMatch[1]) {
+        let name = labelMatch[1].replace(/[:=\\-]+$/, '').trim();
+        name = name.replace(/[,.;\\-]+$/, '').trim();
+        if (name && !['vehicle', 'fastag', 'account', 'customer', 'alert', 'lane'].includes(name.toLowerCase()) && name.length > 2) {
+          if (!name.toLowerCase().includes('plaza') && !name.toLowerCase().includes('toll') && !name.toLowerCase().includes('booth')) {
+            return `${name} Toll Plaza`;
+          }
+          return name;
         }
-        return name;
       }
-      // 2. "at <Name> Toll Plaza" or "at <Name> Plaza"
-      const atPlaza = text.match(/at\s+([A-Za-z0-9\s\-\.\/\(\)]+?(?:toll\s*plaza|fee\s*plaza|plaza))/i) ||
-                      text.match(/at\s+([A-Za-z0-9\s\-\.\/]+?)(?:\s*(?:\([^\)]*\)|\[|dated|on\s*\d|ref|txn|for\s*vehicle|$))/i);
-      if (atPlaza && atPlaza[1].trim()) {
-        let name = atPlaza[1].trim().replace(/,\s*$/, '');
-        if (!name.toLowerCase().includes('plaza') && !name.toLowerCase().includes('toll')) {
-          name = `${name} Toll Plaza`;
+
+      // 2. "at <Name> Toll Plaza [(NH-...)]" or "at <Name> Plaza"
+      const atPlazaMatch = text.match(new RegExp('(?:debited\\s+(?:at|for)|payment\\s+at|toll\\s+at|debited\\s+towards\\s+toll\\s+payment\\s+at|at)\\s+([A-Za-z0-9\\s\\-\\.\\/]+?\\b(?:toll\\s*plaza|fee\\s*plaza|toll\\s*booth|plaza)(?:\\s*\\([^\\)]*\\))?)' + boundary, 'i'));
+      if (atPlazaMatch && atPlazaMatch[1]) {
+        let name = atPlazaMatch[1].replace(/[:=\\-]+$/, '').trim();
+        name = name.replace(/[,.;\\-]+$/, '').trim();
+        if (name && name.length > 2) {
+          return name;
         }
-        return name;
       }
+
+      // 3. "at Toll Plaza <Name>" or "at Plaza <Name>"
+      const atPrefixMatch = text.match(new RegExp('(?:at\\s+(?:toll\\s*plaza|fee\\s*plaza|plaza))\\s+([A-Za-z0-9\\s\\-\\.\\/\\(\\)]+?)' + boundary, 'i'));
+      if (atPrefixMatch && atPrefixMatch[1]) {
+        let name = atPrefixMatch[1].replace(/[:=\\-]+$/, '').trim();
+        name = name.replace(/[,.;\\-]+$/, '').trim();
+        if (name && !['vehicle', 'fastag', 'account', 'customer', 'alert', 'lane'].includes(name.toLowerCase()) && name.length > 2) {
+          if (!name.toLowerCase().includes('plaza') && !name.toLowerCase().includes('toll') && !name.toLowerCase().includes('booth')) {
+            return `${name} Toll Plaza`;
+          }
+          return name;
+        }
+      }
+
       return null;
     };
 
-    // Extract Fuel Station / Bunk Name from transaction notes
+    // Extract Fuel Station / Bunk Name from transaction notes or alert email text
     const extractFuelStationFromText = (text) => {
       if (!text) return null;
-      const pinMatch = text.match(/\b([1-9][0-9]{5})\b/);
+      const pinMatch = text.match(/(?:pin(?:\s*code)?|postal(?:\s*code)?)\s*[:=\-]?\s*([1-9][0-9]{5})\b/i);
       const pinCode = pinMatch ? pinMatch[1] : null;
 
-      const stationMatch = text.match(/(?:at|merchant|pump|station|dealer)[:\s\-]+([A-Za-z0-9\s\-\.\/,]+?)(?:\s*(?:\[|dated|ref|txn|volume|liters|on\s*\d|$))/i) ||
-                           text.match(/Diesel\s*(?:\d+L)?\s*([A-Za-z0-9\s\-\.\/,]+?)(?:\s*(?:\[|dated|ref|txn|$))/i);
-      if (stationMatch && stationMatch[1].trim()) {
-        let name = stationMatch[1].trim().replace(/,\s*$/, '');
-        if (pinCode && !name.includes(pinCode)) {
-          return `${name} (PIN ${pinCode})`;
+      // Stop words that indicate the end of fuel bunk name
+      const boundary = '(?=\\s*(?:[\\|,;]\\s*|\\.\\s+|(?:at\\s+)?(?:vehicle|vrn|reg|tag|date|time|txn|trans|ref|urn|rrn|amt|amount|inr|rs|fee|balance|bal|acct|account|avail|available|dated|on\\s*\\d|for|pin|volume|liters|fuel|diesel|\\[|$)))';
+
+      // 1. Explicit merchant / pump / dealer label: "Merchant: IOCL SWAGATH", "Pump: HPCL COCO"
+      const labelMatch = text.match(new RegExp('(?:merchant|dealer|pump|station|fuel\\s*station|petrol\\s*pump)\\s*[:=\\-]+\\s*([A-Za-z0-9\\s\\-\\.\\/\\(\\),]+?)' + boundary, 'i'));
+
+      // 2. "used at <Pump>", "filled at <Pump>", "debited at <Pump>", "at <Pump>"
+      const atMatch = text.match(new RegExp('(?:used\\s+at|filled\\s+at|debited\\s+at|transaction\\s+at|payment\\s+at|at)\\s+([A-Za-z0-9\\s\\-\\.\\/\\(\\),]+?)' + boundary, 'i'));
+
+      const m = labelMatch || atMatch;
+      if (m && m[1]) {
+        let name = m[1].replace(/[:=\\-]+$/, '').trim().replace(/[,.;\\-]+$/, '').trim();
+        if (name.length > 2 && !['card', 'fleet', 'account', 'customer', 'driver'].includes(name.toLowerCase())) {
+          if (pinCode && !name.includes(pinCode)) {
+            return `${name} (PIN ${pinCode})`;
+          }
+          return name;
         }
-        return name;
       }
       return null;
     };
@@ -6321,7 +6352,8 @@
           const autoEntry = isAutoExpenseRecord(e);
           const cleanMethod = (e.paymentMethod && e.paymentMethod !== 'Fleet Card') ? e.paymentMethod : '';
           const cleanNotes = (e.notes || '').trim();
-          const details = cleanMethod && cleanNotes ? `${cleanMethod} • ${cleanNotes}` : (cleanMethod || cleanNotes || '-');
+          const locStr = (e.location && !cleanNotes.toLowerCase().includes(e.location.toLowerCase())) ? `${e.location} • ` : '';
+          const details = cleanMethod && cleanNotes ? `${cleanMethod} • ${locStr}${cleanNotes}` : (cleanMethod || (locStr + cleanNotes) || '-');
           list.push({
             id: e.id, type: 'EXPENSE', date: e.date, entity: trk ? trk.registrationNumber : e.truckId,
             title: `Expense: ${e.category}`, amount: e.amount,
