@@ -221,18 +221,23 @@
     // Extract Toll Plaza Name from transaction notes
     const extractPlazaNameFromText = (text) => {
       if (!text) return null;
-      const atPlaza = text.match(/at\s+([A-Za-z0-9\s\-\.\/]+?)(?:\s*(?:\([^\)]*\)|\[|dated|on\s*\d|ref|txn|$))/i);
-      if (atPlaza && atPlaza[1].trim()) {
-        let name = atPlaza[1].trim();
+      // 1. Explicit labeled toll/fee plaza: e.g. "Toll Plaza: KHALAPUR", "Fee Plaza : Khed-Shivapur Toll Plaza (NH-48)"
+      const plazaMatch = text.match(/(?:toll\s*plaza|fee\s*plaza|plaza\s*name|plaza)[:\s\-]+([A-Za-z0-9\s\-\.\/\(\)]+?)(?:\s*(?:\[|dated|on\s*\d|ref|txn|for\s*vehicle|$))/i);
+      if (plazaMatch && plazaMatch[1].trim()) {
+        let name = plazaMatch[1].trim().replace(/,\s*$/, '');
         if (!name.toLowerCase().includes('plaza') && !name.toLowerCase().includes('toll')) {
           name = `${name} Toll Plaza`;
         }
         return name;
       }
-      const plazaMatch = text.match(/(?:toll\s*plaza|fee\s*plaza|plaza)[:\s\-]+([A-Za-z0-9\s\-\.\/]+?)(?:\s*(?:\([^\)]*\)|\[|dated|on\s*\d|ref|txn|$))/i);
-      if (plazaMatch && plazaMatch[1].trim()) {
-        let name = plazaMatch[1].trim();
-        if (!name.toLowerCase().includes('plaza')) name = `${name} Toll Plaza`;
+      // 2. "at <Name> Toll Plaza" or "at <Name> Plaza"
+      const atPlaza = text.match(/at\s+([A-Za-z0-9\s\-\.\/\(\)]+?(?:toll\s*plaza|fee\s*plaza|plaza))/i) ||
+                      text.match(/at\s+([A-Za-z0-9\s\-\.\/]+?)(?:\s*(?:\([^\)]*\)|\[|dated|on\s*\d|ref|txn|for\s*vehicle|$))/i);
+      if (atPlaza && atPlaza[1].trim()) {
+        let name = atPlaza[1].trim().replace(/,\s*$/, '');
+        if (!name.toLowerCase().includes('plaza') && !name.toLowerCase().includes('toll')) {
+          name = `${name} Toll Plaza`;
+        }
         return name;
       }
       return null;
@@ -241,10 +246,17 @@
     // Extract Fuel Station / Bunk Name from transaction notes
     const extractFuelStationFromText = (text) => {
       if (!text) return null;
-      const stationMatch = text.match(/(?:at|pump|station)[:\s\-]+([A-Za-z0-9\s\-\.\/]+?)(?:\s*(?:\([^\)]*\)|\[|dated|ref|txn|$))/i) ||
-                           text.match(/Diesel\s*(?:\d+L)?\s*([A-Za-z0-9\s\-\.\/]+?)(?:\s*(?:\([^\)]*\)|\[|$))/i);
+      const pinMatch = text.match(/\b([1-9][0-9]{5})\b/);
+      const pinCode = pinMatch ? pinMatch[1] : null;
+
+      const stationMatch = text.match(/(?:at|merchant|pump|station|dealer)[:\s\-]+([A-Za-z0-9\s\-\.\/,]+?)(?:\s*(?:\[|dated|ref|txn|volume|liters|on\s*\d|$))/i) ||
+                           text.match(/Diesel\s*(?:\d+L)?\s*([A-Za-z0-9\s\-\.\/,]+?)(?:\s*(?:\[|dated|ref|txn|$))/i);
       if (stationMatch && stationMatch[1].trim()) {
-        return stationMatch[1].trim();
+        let name = stationMatch[1].trim().replace(/,\s*$/, '');
+        if (pinCode && !name.includes(pinCode)) {
+          return `${name} (PIN ${pinCode})`;
+        }
+        return name;
       }
       return null;
     };
