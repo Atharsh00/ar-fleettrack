@@ -218,6 +218,37 @@
       return idB.localeCompare(idA);
     };
 
+    // Extract Toll Plaza Name from transaction notes
+    const extractPlazaNameFromText = (text) => {
+      if (!text) return null;
+      const atPlaza = text.match(/at\s+([A-Za-z0-9\s\-\.\/]+?)(?:\s*(?:\([^\)]*\)|\[|dated|on\s*\d|ref|txn|$))/i);
+      if (atPlaza && atPlaza[1].trim()) {
+        let name = atPlaza[1].trim();
+        if (!name.toLowerCase().includes('plaza') && !name.toLowerCase().includes('toll')) {
+          name = `${name} Toll Plaza`;
+        }
+        return name;
+      }
+      const plazaMatch = text.match(/(?:toll\s*plaza|fee\s*plaza|plaza)[:\s\-]+([A-Za-z0-9\s\-\.\/]+?)(?:\s*(?:\([^\)]*\)|\[|dated|on\s*\d|ref|txn|$))/i);
+      if (plazaMatch && plazaMatch[1].trim()) {
+        let name = plazaMatch[1].trim();
+        if (!name.toLowerCase().includes('plaza')) name = `${name} Toll Plaza`;
+        return name;
+      }
+      return null;
+    };
+
+    // Extract Fuel Station / Bunk Name from transaction notes
+    const extractFuelStationFromText = (text) => {
+      if (!text) return null;
+      const stationMatch = text.match(/(?:at|pump|station)[:\s\-]+([A-Za-z0-9\s\-\.\/]+?)(?:\s*(?:\([^\)]*\)|\[|dated|ref|txn|$))/i) ||
+                           text.match(/Diesel\s*(?:\d+L)?\s*([A-Za-z0-9\s\-\.\/]+?)(?:\s*(?:\([^\)]*\)|\[|$))/i);
+      if (stationMatch && stationMatch[1].trim()) {
+        return stationMatch[1].trim();
+      }
+      return null;
+    };
+
     // --- INITIAL MULTI-PROFILE MOCK DATA ---
     const initialProfiles = [
       { id: 'prof-1', userId: 'usr-1', name: 'Apex Logistics India', isDefault: true, createdAt: '2026-01-01' },
@@ -2629,9 +2660,7 @@
           const cleanTxnId = isValidTxnId ? rawTxn : null;
 
           // Extract Plaza or Fuel Station name
-          const plazaMatch = fullText.match(/(?:at|plaza)\s+([A-Za-z0-9\s\-]{3,35}?)(?:\s+(?:toll\s*plaza|toll|plaza|pump|station))/i)
-            || fullText.match(/Toll\s*Plaza\s*[:\-]?\s*([A-Za-z0-9\s\-]{3,30})/i);
-          const plazaName = plazaMatch ? plazaMatch[1].trim() : null;
+          const plazaName = category === 'TOLL' ? extractPlazaNameFromText(fullText) : extractFuelStationFromText(fullText);
 
           // Tag active ongoing trip for that truck: fuel and FASTag debits from trip start until the start of next trip belong to this trip
           const ongoingTrip = findOngoingTripForTruck(targetTruckId, actualDate);
@@ -2680,6 +2709,7 @@
             isReimbursable: false,
             category: category,
             amount: amount,
+            location: plazaName || undefined,
             paymentMethod: category === 'TOLL' ? 'FASTag (Auto-Email)' : 'Fleet Card (Auto-Email)',
             notes: fullNote,
             sourceEmailId: mail.id,
@@ -4078,7 +4108,31 @@
                               </span>
                             )}
                           </td>
-                          <td className="py-2 px-3 text-slate-300">{e.notes || e.paymentMethod}</td>
+                          <td className="py-2 px-3 text-slate-300">
+                            {e.category === 'TOLL' ? (
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
+                                  <span>🛣️</span>
+                                  <span>{e.location || extractPlazaNameFromText(e.notes) || 'Toll Plaza'}</span>
+                                </div>
+                                <div className="text-[11px] text-slate-400 truncate max-w-md" title={e.notes || e.paymentMethod}>
+                                  {e.notes || e.paymentMethod}
+                                </div>
+                              </div>
+                            ) : e.category === 'DIESEL' ? (
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-1.5 text-xs font-bold text-purple-300">
+                                  <span>⛽</span>
+                                  <span>{e.location || extractFuelStationFromText(e.notes) || 'Fuel Station'}</span>
+                                </div>
+                                <div className="text-[11px] text-slate-400 truncate max-w-md" title={e.notes || e.paymentMethod}>
+                                  {e.notes || e.paymentMethod}
+                                </div>
+                              </div>
+                            ) : (
+                              <div>{e.notes || e.paymentMethod}</div>
+                            )}
+                          </td>
                           <td className="py-2 px-3 text-right font-mono text-rose-400 font-bold whitespace-nowrap">{formatCurr(e.amount)}</td>
                           <td className="py-2 px-3 text-center whitespace-nowrap">
                             <div className="flex items-center justify-center gap-2">
