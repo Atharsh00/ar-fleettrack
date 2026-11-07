@@ -1131,8 +1131,58 @@
             const destination = resolveLocationSmart(activeTrip.toLocation, lastTollPlaza);
             const drops = (activeTrip.additionalDrops || []).map(d => resolveLocationSmart(d));
 
-            const waypoints = [origin, ...drops, destination];
-            const cacheKey = waypoints.map(w => w.name.toLowerCase().replace(/[^a-z0-9]/g, '')).join('_to_');
+            // Lightweight Mapbox / Geocode fallback for any unmapped fuel stops (cached permanently)
+            for (const d of dieselEntries) {
+              if (!d.cleanDetails?.lat) {
+                const searchQ = d.cleanDetails?.name && !['fuel station', 'service bunk'].some(w => d.cleanDetails.name.toLowerCase().includes(w))
+                  ? d.cleanDetails.name
+                  : (d.cleanDetails?.address || d.location);
+                if (searchQ && searchQ.length > 3) {
+                  try {
+                    const geo = await geocodeLocationOnline(searchQ);
+                    if (geo && geo.lat && geo.lng) {
+                      if (!d.cleanDetails) d.cleanDetails = parseExpenseLocationDetails(d);
+                      d.cleanDetails.lat = geo.lat;
+                      d.cleanDetails.lng = geo.lng;
+                    }
+                  } catch(e) {}
+                }
+              }
+            }
+
+            // 1. Gather all chronological transit milestones (Tolls & Fuel stops) with valid coordinates
+            const transitMilestones = [
+              ...tollEntries.map(t => {
+                const det = t.cleanDetails || parseExpenseLocationDetails(t);
+                return { name: det.name, lat: det.lat, lng: det.lng, timestamp: t.timestamp || `${t.date}T${t.time || '00:00'}:00`, kind: 'TOLL' };
+              }),
+              ...dieselEntries.map(d => {
+                const det = d.cleanDetails || parseExpenseLocationDetails(d);
+                return { name: det.name, lat: det.lat, lng: det.lng, timestamp: d.timestamp || `${d.date}T${d.time || '00:00'}:00`, kind: 'DIESEL' };
+              })
+            ]
+            .filter(s => s.lat && s.lng)
+            .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+            // 2. Chain waypoints: Origin -> Chronological Highway Milestones (filtered >= 15 km apart) -> Additional Drops -> Destination
+            const filteredMilestones = [];
+            let lastLat = origin.lat;
+            let lastLng = origin.lng;
+
+            for (const m of transitMilestones) {
+              const distFromLast = haversineDistKm(lastLat, lastLng, m.lat, m.lng);
+              const distToDest = haversineDistKm(m.lat, m.lng, destination.lat, destination.lng);
+              // Must be at least 15 km from last point and at least 10 km from destination to prevent loops
+              if (distFromLast >= 15 && distToDest >= 10) {
+                filteredMilestones.push(m);
+                lastLat = m.lat;
+                lastLng = m.lng;
+              }
+            }
+
+            const waypoints = [origin, ...filteredMilestones, ...drops, destination];
+            const telemetrySig = `${transitMilestones.length}m`;
+            const cacheKey = `trip_route_${activeTrip.id}_${telemetrySig}`;
 
             let cachedRoutes = {};
             try { cachedRoutes = JSON.parse(localStorage.getItem(ROUTE_CACHE_KEY) || '{}'); } catch(e) {}
@@ -1166,30 +1216,19 @@
               }
             }
 
-            // Lightweight Mapbox / Geocode fallback for any unmapped fuel stops (cached permanently)
-            for (const d of dieselEntries) {
-              if (!d.cleanDetails?.lat) {
-                const searchQ = d.cleanDetails?.name && !['fuel station', 'service bunk'].some(w => d.cleanDetails.name.toLowerCase().includes(w))
-                  ? d.cleanDetails.name
-                  : (d.cleanDetails?.address || d.location);
-                if (searchQ && searchQ.length > 3) {
-                  try {
-                    const geo = await geocodeLocationOnline(searchQ);
-                    if (geo && geo.lat && geo.lng) {
-                      if (!d.cleanDetails) d.cleanDetails = parseExpenseLocationDetails(d);
-                      d.cleanDetails.lat = geo.lat;
-                      d.cleanDetails.lng = geo.lng;
-                    }
-                  } catch(e) {}
-                }
-              }
-            }
-
             const coordStr = coordsList.map(c => `${c[0]},${c[1]}`).join(';');
             const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
 
-            const res = await fetch(osrmUrl);
-            const json = await res.json();
+            let res = await fetch(osrmUrl);
+            let json = await res.json();
+
+            // Resilient Fallback: If multi-waypoint OSRM fails, fall back to Origin -> Destination
+            if ((!json || !json.routes || !json.routes[0]) && filteredMilestones.length > 0) {
+              const fallbackCoordStr = `${origin.lng},${origin.lat};${destination.lng},${destination.lat}`;
+              const fallbackUrl = `https://router.project-osrm.org/route/v1/driving/${fallbackCoordStr}?overview=full&geometries=geojson`;
+              res = await fetch(fallbackUrl);
+              json = await res.json();
+            }
 
             if (json && json.routes && json.routes[0]) {
               const best = json.routes[0];
@@ -1200,8 +1239,8 @@
                 geometry: best.geometry,
                 waypoints: waypoints.map((w, idx) => ({
                   name: w.name,
-                  lng: coordsList[idx][0],
-                  lat: coordsList[idx][1]
+                  lng: coordsList[idx] ? coordsList[idx][0] : w.lng,
+                  lat: coordsList[idx] ? coordsList[idx][1] : w.lat
                 }))
               };
 
@@ -1224,7 +1263,7 @@
 
         computeRoute();
         return () => { isMounted = false; };
-      }, [activeTrip, activeTripStatus, tollEntries]);
+      }, [activeTrip, activeTripStatus, tollEntries, dieselEntries]);
 
       // --- RELIABLE LEAFLET MAP ENGINE (ESRI TILES - ZERO 403 BLOCKS) ---
       useEffect(() => {
